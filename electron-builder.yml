@@ -1,0 +1,51 @@
+appId: io.github.kongyo2.desktop-monero-miner
+productName: Desktop Monero Miner
+copyright: Copyright © 2026 kongyo2
+asar: true
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - package.json
+  - '!**/*.map'
+  - '!**/__tests__/**'
+
+extraMetadata:
+  main: dist/main/index.js
+
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+    - target: tar.gz
+      arch: [x64]
+  category: Utility
+  synopsis: Desktop Monero miner built with Electron and TypeScript
+
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+  category: public.app-category.utilities
+  identity: null
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+
+publish: null
