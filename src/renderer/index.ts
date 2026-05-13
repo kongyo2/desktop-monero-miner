@@ -142,6 +142,11 @@ class App {
 
   private bindStateUpdates(): void {
     window.miner.onStateUpdate((update) => this.applyUpdate(update));
+    // Subscribe first, then pull the current snapshot — without this, a
+    // renderer that attaches mid-session (e.g. while xmrig is starting or
+    // already mining) stays on 'idle' until the next status transition.
+    // Subscribe を先に行ってから snapshot を取得し、間に発火したイベントを取り逃さない。
+    void window.miner.getMiningState().then((update) => this.applyUpdate(update));
   }
 
   private async startMining(config: MinerConfig): Promise<void> {

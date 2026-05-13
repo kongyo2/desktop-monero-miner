@@ -3,7 +3,6 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   type AppPreferences,
   type MinerConfig,
-  type MiningStatus,
   type PartialMinerConfig,
   type PersistedState,
 } from '../shared/config-schema.ts';
@@ -17,7 +16,7 @@ export type MinerBridge = {
   startMining: (config: MinerConfig) => Promise<MiningStateUpdate>;
   stopMining: () => Promise<MiningStateUpdate>;
   resetStats: () => Promise<MiningStateUpdate>;
-  getMiningStatus: () => Promise<MiningStatus>;
+  getMiningState: () => Promise<MiningStateUpdate>;
   onStateUpdate: (handler: (update: MiningStateUpdate) => void) => () => void;
   openExternal: (url: string) => Promise<void>;
   appVersion: () => Promise<string>;
@@ -31,7 +30,7 @@ const bridge: MinerBridge = {
   startMining: (config) => ipcRenderer.invoke(IpcChannel.StartMining, config),
   stopMining: () => ipcRenderer.invoke(IpcChannel.StopMining),
   resetStats: () => ipcRenderer.invoke(IpcChannel.ResetStats),
-  getMiningStatus: () => ipcRenderer.invoke(IpcChannel.GetMiningStatus),
+  getMiningState: () => ipcRenderer.invoke(IpcChannel.GetMiningState),
   onStateUpdate: (handler) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown): void => {
       handler(payload as MiningStateUpdate);

@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { createWriteStream, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readdir, rename, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -7,48 +8,56 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 /**
- * Pinned xmrig release that the runner downloads on first launch when no
- * pre-installed binary is found on PATH or via the XMRIG_BIN env var. Updating
- * the version requires updating both the constant and the per-platform asset
- * filenames in TARGETS below — the URL pattern is otherwise stable.
- * 同梱 xmrig のピン留めバージョン。更新時は TARGETS のアセットファイル名も合わせる。
+ * Pinned xmrig release. The version, the per-platform asset filenames, and
+ * their SHA-256 digests must all advance together — bumping the version
+ * without updating the digests would break verification (correctly).
+ * 同梱 xmrig のピン留め。version / アセット名 / SHA-256 はセットで更新する。
  */
 const XMRIG_VERSION = '6.22.2';
 
 type Target = {
   /** Asset filename inside the GitHub release. */
   asset: string;
-  /** Binary name relative to the extracted directory root. */
+  /** Binary path relative to the extracted directory root. */
   binary: string;
+  /**
+   * Lowercase hex SHA-256 digest of the release asset, pinned in source so a
+   * compromised CDN / redirect / TLS endpoint cannot silently slip a swapped
+   * binary into the main-process spawn. Sourced from the SHA256SUMS file
+   * published alongside the release on https://github.com/xmrig/xmrig/releases.
+   * 公式リリースに同梱の SHA256SUMS から拾ってベタ書き。検証失敗時はファイルを破棄する。
+   */
+  sha256: string;
 };
 
 /**
  * GitHub release asset naming follows `xmrig-<ver>-<platform>.<ext>` and is
- * stable across recent releases. Linux ships static builds so we don't pull in
- * an unknown libc; macOS ships separate x64 and arm64 archives; Windows ships
- * a single msvc zip with `xmrig.exe`.
- * GitHub リリースのアセット名は安定。Linux は static ビルドを採用して libc 依存を避ける。
+ * stable across recent releases. Linux ships a single static build for x64;
+ * macOS ships separate x64 and arm64 archives; Windows ships an MSVC zip
+ * containing `xmrig.exe`. xmrig does not publish a Linux arm64 static binary,
+ * so users on that platform must supply XMRIG_BIN or install xmrig manually.
+ * Linux arm64 は公式静的ビルドが無いため、自動 DL 対象外（PATH / XMRIG_BIN 経由で利用してもらう）。
  */
 const TARGETS: Record<string, Target> = {
   'linux-x64': {
     asset: `xmrig-${XMRIG_VERSION}-linux-static-x64.tar.gz`,
     binary: `xmrig-${XMRIG_VERSION}/xmrig`,
-  },
-  'linux-arm64': {
-    asset: `xmrig-${XMRIG_VERSION}-linux-static-arm64.tar.gz`,
-    binary: `xmrig-${XMRIG_VERSION}/xmrig`,
+    sha256: 'b2c88b19699e3d22c4db0d589f155bb89efbd646ecf9ad182ad126763723f4b7',
   },
   'darwin-x64': {
     asset: `xmrig-${XMRIG_VERSION}-macos-x64.tar.gz`,
     binary: `xmrig-${XMRIG_VERSION}/xmrig`,
+    sha256: '868b0622da3a6ce522c69cfb1ce7c0e7f4514887f427a7accc485be2dfb933fb',
   },
   'darwin-arm64': {
     asset: `xmrig-${XMRIG_VERSION}-macos-arm64.tar.gz`,
     binary: `xmrig-${XMRIG_VERSION}/xmrig`,
+    sha256: '625375bf2f5ba609c8034667ef8073e81c0e864df224fa57386a754e788fc6ce',
   },
   'win32-x64': {
     asset: `xmrig-${XMRIG_VERSION}-msvc-win64.zip`,
     binary: `xmrig-${XMRIG_VERSION}/xmrig.exe`,
+    sha256: '1d903d39c7e4e1706c32c44721d6a6c851aa8c4c10df1479478ee93cd67301bc',
   },
 };
 
@@ -59,14 +68,16 @@ export class XmrigInstallError extends Error {
   }
 }
 
-export type InstallProgress = (phase: 'download' | 'extract', detail: string) => void;
+export type InstallProgress = (phase: 'download' | 'verify' | 'extract', detail: string) => void;
 
 /**
  * Resolve the xmrig binary path, downloading and extracting the pinned release
- * into `cacheDir` if it is not already present. The cached layout under
- * cacheDir is `xmrig-<ver>/xmrig[.exe]`, so subsequent launches short-circuit
- * to the cached binary without touching the network.
- * xmrig バイナリを cacheDir 配下に展開済みなら即返し、無ければ取得して展開する。
+ * into `cacheDir` if it is not already present. The downloaded archive is
+ * verified against a pinned SHA-256 before extraction; a mismatch deletes the
+ * file and aborts the install rather than running attacker-controlled bytes.
+ * The cached layout is `xmrig-<ver>/xmrig[.exe]`, so subsequent launches
+ * short-circuit to the cached binary without touching the network.
+ * 展開済みなら即返し、無ければ取得→SHA-256 検証→展開。検証失敗ならファイル破棄。
  */
 export async function ensureXmrigBinary(
   cacheDir: string,
@@ -85,6 +96,13 @@ export async function ensureXmrigBinary(
     const url = `https://github.com/xmrig/xmrig/releases/download/v${XMRIG_VERSION}/${target.asset}`;
     progress('download', url);
     await downloadFile(url, archivePath);
+    progress('verify', target.sha256);
+    const actual = await sha256OfFile(archivePath);
+    if (actual !== target.sha256) {
+      throw new XmrigInstallError(
+        `xmrig archive checksum mismatch for ${target.asset}: expected ${target.sha256}, got ${actual}`,
+      );
+    }
     progress('extract', archivePath);
     await extractArchive(archivePath, cacheDir);
   } finally {
@@ -131,9 +149,22 @@ function resolveTarget(): Target {
   const key = `${process.platform}-${process.arch}`;
   const target = TARGETS[key];
   if (!target) {
-    throw new XmrigInstallError(`unsupported platform for xmrig auto-install: ${key}`);
+    throw new XmrigInstallError(
+      `no pinned xmrig binary for ${key}; install xmrig manually or set XMRIG_BIN`,
+    );
   }
   return target;
+}
+
+/**
+ * Stream-hash a file with SHA-256. Streaming avoids loading the whole archive
+ * (multi-megabyte) into memory just to compute its digest.
+ * ファイルを stream で SHA-256 化。アーカイブを丸ごとメモリに乗せないため。
+ */
+async function sha256OfFile(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  await pipeline(createReadStream(path), hash);
+  return hash.digest('hex');
 }
 
 /**

@@ -38,8 +38,8 @@ export type XmrigOptions = {
    * 自動インストール時の展開先。runner を Electron 非依存に保つため呼び出し側から受け取る。
    */
   cacheDir: string;
-  /** Optional progress sink for download/extract phases of first-launch install. */
-  onInstallProgress?: (phase: 'download' | 'extract', detail: string) => void;
+  /** Optional progress sink for download/verify/extract phases of first-launch install. */
+  onInstallProgress?: (phase: 'download' | 'verify' | 'extract', detail: string) => void;
 };
 
 type ParsedPool = {
@@ -403,6 +403,13 @@ export function buildXmrigArgs(
   const login = config.workerId
     ? `${config.walletAddress}.${config.workerId}`
     : config.walletAddress;
+  // Translate the UI throttle (0 = full power, 99 = 1%) into a concrete reduced
+  // thread count. xmrig's `--cpu-max-threads-hint` is only consulted during
+  // autoconfig, so it has no effect when `-t` already pins thread count; the
+  // only reliable knob for actual CPU usage reduction is reducing threads.
+  // throttle (0..99) を実効スレッド数の削減に変換。xmrig の hint は -t 併用時に
+  // 効かないので、スレッド数を直接削るのが唯一確実な手段。
+  const effectiveThreads = computeEffectiveThreads(config.threads, config.throttle);
   const args: string[] = [
     '-o',
     `${pool.host}:${pool.port}`,
@@ -414,7 +421,6 @@ export function buildXmrigArgs(
     'monero',
     '-k',
     '--no-color',
-    '--randomx-no-rdmsr',
     '--http-host',
     '127.0.0.1',
     '--http-port',
@@ -422,17 +428,20 @@ export function buildXmrigArgs(
     '--http-access-token',
     apiToken,
     '-t',
-    String(config.threads),
+    String(effectiveThreads),
   ];
   if (logFile) args.push('-l', logFile);
   if (pool.tls) args.push('--tls');
-  if (config.throttle > 0) {
-    // xmrig's `--cpu-max-threads-hint` caps the share of detected CPU threads
-    // used by the miner. Throttle in our UI is "% slowdown", so the actual
-    // utilization hint is 100 - throttle. Clamp to 1 because xmrig refuses 0.
-    // 設定の throttle は「遅くする割合」。xmrig の hint は逆向きなので 100 から引く。
-    const hint = Math.max(1, 100 - config.throttle);
-    args.push('--cpu-max-threads-hint', String(hint));
-  }
   return args;
+}
+
+export function computeEffectiveThreads(threads: number, throttle: number): number {
+  if (!Number.isFinite(threads) || threads < 1) return 1;
+  if (!Number.isFinite(throttle) || throttle <= 0) return Math.floor(threads);
+  const remaining = Math.max(0, 100 - throttle) / 100;
+  // Round to nearest so throttle=50 on 4 threads gives 2, but always keep at
+  // least one thread running — a configured "Start" should never silently
+  // produce a no-op miner.
+  // 最低 1 スレッドは保証。0 にすると採掘がそもそも始まらない無駄な起動になる。
+  return Math.max(1, Math.round(threads * remaining));
 }

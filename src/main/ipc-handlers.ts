@@ -7,7 +7,6 @@ import {
   type MiningStatus,
   type PersistedState,
   minerConfigSchema,
-  miningStatusSchema,
 } from '../shared/config-schema.ts';
 import {
   IpcChannel,
@@ -126,8 +125,13 @@ export function registerIpcHandlers(
     return coordinator.snapshot();
   });
 
-  ipcMain.handle(IpcChannel.GetMiningStatus, (): MiningStatus => {
-    return miningStatusSchema.parse(coordinator.getStatus());
+  ipcMain.handle(IpcChannel.GetMiningState, (): MiningStateUpdate => {
+    // Renderers attaching mid-session need the current snapshot, not just the
+    // next push update — without this they stay on 'idle' through a long
+    // first-run install and the Stop button stays disabled.
+    // 起動途中で attach した renderer に現状の status/stats を渡す。subscribe だけだと
+    // 次のイベントが来るまで idle のままになり、Stop が押せない状態に陥る。
+    return coordinator.snapshot();
   });
 
   ipcMain.handle(IpcChannel.OpenExternal, async (_event, raw: unknown): Promise<void> => {
