@@ -238,14 +238,14 @@ class StratumBridge {
     if (this.pool) return;
     const endpoint = parsePool(toStringOr(handshake['pool'], ''));
     if (!endpoint) {
-      this.sendClient({ identifier: 'rejected', error: { message: 'invalid_pool_endpoint' } });
+      this.sendControlError('invalid_pool_endpoint');
       this.shutdown();
       return;
     }
 
     const wallet = toStringOr(handshake['login'], '').trim();
     if (!wallet) {
-      this.sendClient({ identifier: 'rejected', error: { message: 'missing_wallet_address' } });
+      this.sendControlError('missing_wallet_address');
       this.shutdown();
       return;
     }
@@ -285,7 +285,7 @@ class StratumBridge {
     sock.on('close', () => this.shutdown());
     sock.on('error', (err) => {
       console.warn('[stratum-proxy] pool socket error:', err.message);
-      this.sendClient({ identifier: 'rejected', error: { message: err.message } });
+      this.sendControlError(err.message);
       this.shutdown();
     });
     this.pool = sock;
@@ -338,7 +338,9 @@ class StratumBridge {
         if (job) this.forwardJob(job);
       }
       if (error) {
-        this.sendClient({ identifier: 'rejected', error });
+        // Login failure is a control-plane error, not a share rejection.
+        // ログイン失敗は制御パスのエラーであり、share rejected ではない。
+        this.sendControlError(extractErrorMessage(error) ?? 'login_failed');
         this.shutdown();
       }
       return;
@@ -355,6 +357,9 @@ class StratumBridge {
       ) {
         this.sendClient({ identifier: 'accepted', job_id: ctx.job_id });
       } else {
+        // Only an actual submit failure increments the rejected-shares
+        // metric on the client side.
+        // submit に対する失敗だけが share rejected として扱われる。
         this.sendClient({ identifier: 'rejected', job_id: ctx.job_id, error: error ?? null });
       }
     }
@@ -368,10 +373,7 @@ class StratumBridge {
       // a silent stall.
       // ワーカーは CryptoNight 系のみ対応。RandomX 系のジョブが届いた場合は
       // 明示的に拒否してユーザにフィードバックする。
-      this.sendClient({
-        identifier: 'rejected',
-        error: { message: `unsupported_algo:${job.algo ?? 'unknown'}` },
-      });
+      this.sendControlError(`unsupported_algo:${job.algo ?? 'unknown'}`);
       this.shutdown();
       return;
     }
@@ -434,6 +436,27 @@ class StratumBridge {
       console.warn('[stratum-proxy] ws send failed:', err instanceof Error ? err.message : err);
     }
   }
+
+  /**
+   * Emit a control-plane error (invalid pool, connect failure, login failure,
+   * unsupported algorithm). Distinct from `rejected` so consumers that count
+   * rejected shares don't inflate that metric with non-share errors.
+   * 制御パスのエラー（接続/認証/設定不正/未対応アルゴリズム）。share rejected
+   * メトリクスを膨らませないため identifier を分けて通知する。
+   */
+  private sendControlError(message: string): void {
+    this.sendClient({ identifier: 'error', message });
+  }
+}
+
+function extractErrorMessage(error: unknown): string | undefined {
+  if (!error) return undefined;
+  if (typeof error === 'string') return error;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const m = (error as { message: unknown }).message;
+    if (typeof m === 'string') return m;
+  }
+  return undefined;
 }
 
 function toStringOr(value: unknown, fallback: string): string {

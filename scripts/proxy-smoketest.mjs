@@ -38,7 +38,8 @@ if (u1 !== u2 || u2 !== u3 || u3 !== u4) {
 const url = u1;
 console.log('proxy listening at', url, '(concurrent start ok)');
 
-// 1) Invalid pool format → expect rejected, then close.
+// 1) Invalid pool format → expect a control-plane `error` (not `rejected`,
+//    which is reserved for actual submit-result failures), then close.
 {
   const ws = new WebSocket(url);
   await new Promise((resolve, reject) => {

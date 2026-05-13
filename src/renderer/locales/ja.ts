@@ -17,7 +17,7 @@ export const ja: Messages = {
     '形式: host:port または host:port:tls（例: gulf.moneroocean.stream:10128）。同梱プロキシが TCP/TLS で接続します。',
   fieldWebSocket: 'WebSocket 上書き（任意）',
   fieldWebSocketHelp:
-    '空欄なら同梱ローカルプロキシ（ws://127.0.0.1:…）を使用します。外部リレーを使いたいときのみ wss:// URL を指定してください。',
+    '空欄なら同梱ローカルプロキシ（ws://127.0.0.1:…）を使用します。外部リレーを使うときは wss:// で始まる URL を指定してください（CSP により平文 ws:// 外部接続は禁止）。',
   advancedSummary: '詳細設定',
   fieldThreads: 'スレッド数',
   fieldThrottle: 'スロットル (%)',

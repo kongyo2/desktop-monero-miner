@@ -17,7 +17,7 @@ export const en: Messages = {
     'Format: host:port or host:port:tls (e.g. gulf.moneroocean.stream:10128). The bundled proxy connects over TCP/TLS.',
   fieldWebSocket: 'WebSocket override (optional)',
   fieldWebSocketHelp:
-    'Leave empty to use the bundled local proxy (ws://127.0.0.1:…). Provide a wss:// URL only to route through an external relay instead.',
+    'Leave empty to use the bundled local proxy (ws://127.0.0.1:…). External relays must use wss:// — plain ws:// to non-loopback hosts is blocked by CSP.',
   advancedSummary: 'Advanced',
   fieldThreads: 'Threads',
   fieldThrottle: 'Throttle (%)',

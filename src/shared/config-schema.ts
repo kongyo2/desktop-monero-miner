@@ -60,12 +60,16 @@ const optionalWsUrlSchema = z
   .refine(
     (value) => {
       // Empty means "use the bundled local proxy"; the main process will
-      // inject its own ws://127.0.0.1:<port> URL at start time.
-      // 空文字は「同梱ローカルプロキシを使う」を意味する。実 URL は main 側で注入。
+      // inject its own ws://127.0.0.1:<port> URL at start time. Explicit
+      // overrides must use wss:// — the CSP connect-src directive only
+      // allows wss: and the loopback ws://127.0.0.1:*, so a non-loopback
+      // ws:// URL would validate but be blocked at runtime by the browser.
+      // 空欄はローカルプロキシ。明示上書きは wss:// 必須。CSP は wss: と
+      // ループバックのみ許可しており、外部 ws:// は実行時に CSP で弾かれる。
       if (value === '') return true;
       try {
         const url = new URL(value);
-        if (url.protocol !== 'ws:' && url.protocol !== 'wss:') return false;
+        if (url.protocol !== 'wss:') return false;
         return url.hash === '';
       } catch {
         return false;

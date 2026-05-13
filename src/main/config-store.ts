@@ -48,16 +48,42 @@ function migrateRawState(raw: unknown): unknown {
   const pool = cfg['pool'];
   if (typeof pool === 'string') {
     const trimmed = pool.trim();
-    if (trimmed && !/^[^:]+:\d+(?::(?:tls|ssl))?$/u.test(trimmed)) {
-      // Strip any path/query a user might have pasted, keep only the
-      // hostname component, append the standard auto-diff port.
-      // パス・クエリは捨ててホスト名だけ取り出し、既定ポートを補う。
-      const host = trimmed.split(/[\\/?#]/u)[0]?.split(':')[0] ?? '';
+    if (trimmed && !/^[^:/?#]+:\d+(?::(?:tls|ssl))?$/u.test(trimmed)) {
+      const host = extractLegacyHost(trimmed);
       cfg['pool'] = host ? `${host}:${DEFAULT_STRATUM_PORT}` : undefined;
     }
   }
   next['config'] = cfg;
   return next;
+}
+
+/**
+ * Extract a usable host from a legacy `pool` value. Older releases let users
+ * type either a bare hostname ("moneroocean.stream") or a full URL
+ * ("wss://ny1.xmrminingproxy.com:443/path"). The naive split-on-':' approach
+ * would turn the URL form into the literal string "wss", silently corrupting
+ * upgraded configs — use URL parsing when a scheme is present so the host is
+ * preserved correctly.
+ * 旧バージョンの pool には URL 形式 (wss://…) も混在する。単純な split では
+ * "wss" を host と誤認するため、scheme が付いていれば URL として解釈する。
+ */
+function extractLegacyHost(input: string): string | undefined {
+  if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(input)) {
+    try {
+      const url = new URL(input);
+      const hostname = url.hostname;
+      return hostname || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  // Bare hostname (optionally followed by a stray port, path, query, or
+  // fragment). Strip anything past the host segment, then drop a trailing
+  // port we don't trust (legacy ports were arbitrary, often the WS one).
+  // ホスト名のみ。ポート・パス等が混じっていれば落とす。
+  const stripped = input.split(/[/?#]/u)[0] ?? '';
+  const host = stripped.split(':')[0] ?? '';
+  return host || undefined;
 }
 
 export class ConfigStore {
