@@ -19,6 +19,15 @@ export const localeSchema = z.enum(['ja', 'en']);
 export type Locale = z.infer<typeof localeSchema>;
 
 /**
+ * moneroocean.stream's auto-diff plain-TCP port. Used as both the default for
+ * fresh configs and the fallback port when migrating bare-hostname pool values
+ * persisted by pre-proxy releases of the app.
+ * 既定ポート（moneroocean.stream の auto-diff）。新規設定の既定値と、旧バージョンの
+ * ホスト名のみの pool 値を補正する際の代替ポートを兼ねる。
+ */
+export const DEFAULT_STRATUM_PORT = 10128;
+
+/**
  * Stratum endpoint accepted by the bundled local proxy. Format is
  * "host:port" or "host:port:tls". The proxy opens a raw TCP socket (or TLS
  * when the third token is "tls"/"ssl") to this host and translates between
@@ -74,7 +83,7 @@ export const minerConfigSchema = z.object({
   // error so the user sees a clear signal instead of a silent stall.
   // 既定プール: moneroocean.stream の auto-diff ポート。CN 系のみ対応で、
   // RandomX ジョブが届いた場合はプロキシ側で明示的に拒否を返す。
-  pool: stratumEndpointSchema.default('gulf.moneroocean.stream:10128'),
+  pool: stratumEndpointSchema.default(`gulf.moneroocean.stream:${DEFAULT_STRATUM_PORT}`),
   webSocket: optionalWsUrlSchema,
   threads: z.number().int().min(1).max(256).default(2),
   throttle: z.number().int().min(0).max(99).default(20),

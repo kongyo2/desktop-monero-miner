@@ -65,9 +65,60 @@ export class StratumProxy {
   private wss: WebSocketServer | null = null;
   private address: string | null = null;
   private bridges = new Set<StratumBridge>();
+  /**
+   * Cached promise of the currently running bind/listen. Callers that arrive
+   * while bind is still in flight all await the same promise instead of
+   * spinning up parallel HTTP servers — without this, the later completion
+   * would overwrite this.httpServer/this.wss and leak the earlier listeners
+   * past stop().
+   * 同時並行で start() が呼ばれてもサーバを 1 つに収束させるための共有 Promise。
+   * これが無いと先に bind したリスナーが孤立して stop() で閉じられない。
+   */
+  private startPromise: Promise<string> | null = null;
 
-  public async start(): Promise<string> {
-    if (this.address) return this.address;
+  public start(): Promise<string> {
+    if (this.address) return Promise.resolve(this.address);
+    if (this.startPromise) return this.startPromise;
+    const promise = this.bind().catch((err) => {
+      // Drop the cached promise so the next caller retries instead of
+      // re-receiving the original failure forever.
+      // 失敗時は cache をクリアし、次回呼び出しでリトライ可能にする。
+      if (this.startPromise === promise) this.startPromise = null;
+      throw err;
+    });
+    this.startPromise = promise;
+    return promise;
+  }
+
+  public getAddress(): string | null {
+    return this.address;
+  }
+
+  public async stop(): Promise<void> {
+    for (const bridge of this.bridges) {
+      bridge.shutdown();
+    }
+    this.bridges.clear();
+    const wss = this.wss;
+    const server = this.httpServer;
+    this.wss = null;
+    this.httpServer = null;
+    this.address = null;
+    this.startPromise = null;
+    await Promise.all([
+      new Promise<void>((resolve) => {
+        if (!wss) return resolve();
+        wss.close(() => resolve());
+      }),
+      new Promise<void>((resolve) => {
+        if (!server) return resolve();
+        server.close(() => resolve());
+        server.closeAllConnections?.();
+      }),
+    ]);
+  }
+
+  private async bind(): Promise<string> {
     const server = createServer((_req, res) => {
       // The renderer only opens WebSocket upgrades; any plain HTTP hit is
       // either a misconfiguration or a probe. Reply tersely instead of
@@ -93,7 +144,6 @@ export class StratumProxy {
       // 空きポートを OS に割り当てさせる。
       server.listen(0, '127.0.0.1');
     });
-    this.httpServer = server;
 
     const wss = new WebSocketServer({ server, maxPayload: 1 << 20 });
     wss.on('connection', (ws) => {
@@ -101,42 +151,17 @@ export class StratumProxy {
       this.bridges.add(bridge);
       bridge.start();
     });
-    this.wss = wss;
 
     const addr = server.address();
     if (!addr || typeof addr === 'string') {
-      await this.stop();
+      wss.close();
+      server.close();
       throw new Error('stratum_proxy_bind_failed');
     }
+    this.httpServer = server;
+    this.wss = wss;
     this.address = `ws://127.0.0.1:${addr.port}`;
     return this.address;
-  }
-
-  public getAddress(): string | null {
-    return this.address;
-  }
-
-  public async stop(): Promise<void> {
-    for (const bridge of this.bridges) {
-      bridge.shutdown();
-    }
-    this.bridges.clear();
-    const wss = this.wss;
-    const server = this.httpServer;
-    this.wss = null;
-    this.httpServer = null;
-    this.address = null;
-    await Promise.all([
-      new Promise<void>((resolve) => {
-        if (!wss) return resolve();
-        wss.close(() => resolve());
-      }),
-      new Promise<void>((resolve) => {
-        if (!server) return resolve();
-        server.close(() => resolve());
-        server.closeAllConnections?.();
-      }),
-    ]);
   }
 }
 

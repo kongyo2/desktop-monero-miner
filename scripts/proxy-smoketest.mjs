@@ -20,8 +20,23 @@ writeFileSync(bundlePath, bundle.outputFiles[0].text, 'utf-8');
 const mod = await import(pathToFileURL(bundlePath).href);
 
 const proxy = new mod.StratumProxy();
-const url = await proxy.start();
-console.log('proxy listening at', url);
+// 0) Concurrent start() callers must all settle on the same address; a leaked
+//    listener would surface as different URLs or as a dangling server after
+//    stop(). Kick off four parallel starts before the first one resolves.
+// 並行 start() 呼び出しは同一アドレスを返さねばならない。リスナーが漏れていれば
+// URL が分かれるか、stop() 後にサーバが残る形で検出できる。
+const [u1, u2, u3, u4] = await Promise.all([
+  proxy.start(),
+  proxy.start(),
+  proxy.start(),
+  proxy.start(),
+]);
+if (u1 !== u2 || u2 !== u3 || u3 !== u4) {
+  console.error('concurrent-start FAILED: addresses diverged', { u1, u2, u3, u4 });
+  process.exit(1);
+}
+const url = u1;
+console.log('proxy listening at', url, '(concurrent start ok)');
 
 // 1) Invalid pool format → expect rejected, then close.
 {
