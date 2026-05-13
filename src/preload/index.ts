@@ -9,14 +9,20 @@ import {
 } from '../shared/config-schema.ts';
 import { IpcChannel, type MiningStateUpdate } from '../shared/ipc.ts';
 
+export type StartMiningResult = {
+  status: MiningStatus;
+  webSocket: string;
+};
+
 export type MinerBridge = {
   getConfig: () => Promise<PersistedState['config']>;
   setConfig: (patch: PartialMinerConfig) => Promise<PersistedState['config']>;
   getPreferences: () => Promise<AppPreferences>;
   setPreferences: (patch: Partial<AppPreferences>) => Promise<AppPreferences>;
-  startMining: (config: MinerConfig) => Promise<MiningStatus>;
+  startMining: (config: MinerConfig) => Promise<StartMiningResult>;
   stopMining: () => Promise<MiningStatus>;
   getMiningStatus: () => Promise<MiningStatus>;
+  getProxyAddress: () => Promise<string>;
   reportStats: (update: MiningStateUpdate) => void;
   onStateUpdate: (handler: (update: MiningStateUpdate) => void) => () => void;
   openExternal: (url: string) => Promise<void>;
@@ -31,6 +37,7 @@ const bridge: MinerBridge = {
   startMining: (config) => ipcRenderer.invoke(IpcChannel.StartMining, config),
   stopMining: () => ipcRenderer.invoke(IpcChannel.StopMining),
   getMiningStatus: () => ipcRenderer.invoke(IpcChannel.GetMiningStatus),
+  getProxyAddress: () => ipcRenderer.invoke(IpcChannel.ProxyAddress),
   reportStats: (update) => {
     ipcRenderer.send(IpcChannel.ReportStats, update);
   },

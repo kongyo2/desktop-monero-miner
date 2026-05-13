@@ -2,9 +2,11 @@ import { BrowserWindow, app, ipcMain } from 'electron';
 
 import { ConfigStore } from './config-store.ts';
 import { MiningCoordinator, registerIpcHandlers } from './ipc-handlers.ts';
+import { StratumProxy } from './stratum-proxy.ts';
 import { createMainWindow } from './window.ts';
 
 let mainWindow: BrowserWindow | null = null;
+let proxy: StratumProxy | null = null;
 
 // The Content-Security-Policy is declared in src/renderer/index.html via a
 // <meta http-equiv="Content-Security-Policy"> tag. Electron's
@@ -16,8 +18,9 @@ let mainWindow: BrowserWindow | null = null;
 
 function bootstrap(): void {
   const store = new ConfigStore();
-  const coordinator = new MiningCoordinator(() => mainWindow);
-  registerIpcHandlers(ipcMain, store, coordinator, app.getVersion());
+  proxy = new StratumProxy();
+  const coordinator = new MiningCoordinator(() => mainWindow, proxy);
+  registerIpcHandlers(ipcMain, store, coordinator, app.getVersion(), proxy);
 
   mainWindow = createMainWindow();
   mainWindow.on('closed', () => {
@@ -37,6 +40,26 @@ void app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('will-quit', (event) => {
+  if (!proxy) return;
+  const current = proxy;
+  proxy = null;
+  // Hold the quit until the proxy releases its TCP listeners; otherwise the
+  // OS may keep the loopback port wedged after the app exits, blocking the
+  // next launch on the same port.
+  // ループバックのリスナー解放を待ってから終了。残ったままだと次回起動時に
+  // ポートが掴まれて起動に失敗することがある。
+  event.preventDefault();
+  void current
+    .stop()
+    .catch((err) => {
+      console.warn('[main] stratum proxy stop failed:', err);
+    })
+    .finally(() => {
+      app.exit(0);
+    });
 });
 
 app.on('web-contents-created', (_event, contents) => {

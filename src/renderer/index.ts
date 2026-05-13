@@ -44,8 +44,16 @@ type FormValues = Record<FieldName, string | number> & {
 const FORM_DEFAULTS: FormValues = {
   walletAddress: '',
   workerId: 'Desktop-Miner',
-  pool: 'moneroocean.stream',
-  webSocket: 'wss://ny1.xmrminingproxy.com',
+  // Default Stratum endpoint exposed by moneroocean.stream's auto-diff port.
+  // Format is "host:port" or "host:port:tls".
+  // 既定の Stratum エンドポイント。"host:port" または "host:port:tls" 形式。
+  pool: 'gulf.moneroocean.stream:10128',
+  // Empty = use the bundled local proxy (the main process injects a real
+  // ws://127.0.0.1:<port> URL at start). Override only if you want to point
+  // the renderer at an external WebSocket relay instead.
+  // 空欄は同梱ローカルプロキシを使う指示。外部 WebSocket リレーを使いたい
+  // 場合のみ明示的に URL を設定する。
+  webSocket: '',
   threads: 2,
   throttle: 20,
   password: '',
@@ -56,6 +64,17 @@ class App {
   private readonly miner: WebMiner;
   private autoStart = false;
   private toastTimer: number | null = null;
+  /**
+   * Monotonically increasing token that invalidates an in-flight
+   * startMining() when the user presses Stop while the IPC await is still
+   * resolving (the bundled proxy bootstrap can take a noticeable beat). The
+   * token is captured at the top of startMining() and re-checked after every
+   * await; a stale token means the user already cancelled and mining must
+   * not begin.
+   * 「採掘開始」処理の最中に Stop が押された場合に in-flight な start を無効化する
+   * ためのトークン。await のたびに比較して、古いトークンならそこで処理を中断する。
+   */
+  private startGeneration = 0;
 
   public constructor(locale: Locale) {
     this.i18n = new I18n(locale);
@@ -135,6 +154,11 @@ class App {
     });
 
     requireElement<HTMLButtonElement>('btn-stop').addEventListener('click', () => {
+      // Bump the generation first so any startMining() already past its
+      // initial `++generation` sees a stale token after its next await and
+      // bails out before calling miner.start().
+      // Stop が先に generation を進めることで、in-flight な start を確実に殺す。
+      this.startGeneration += 1;
       this.miner.stop();
       void window.miner.stopMining();
       this.showToast(this.i18n.messages().toastStopped, 'success');
@@ -150,13 +174,35 @@ class App {
   }
 
   private async startMining(config: MinerConfig): Promise<void> {
+    const generation = ++this.startGeneration;
     try {
       await window.miner.setConfig(config);
-      await window.miner.startMining(config);
-      await this.miner.start(config);
+      if (generation !== this.startGeneration) return;
+      // Main process boots the bundled Stratum proxy and returns the
+      // ws://127.0.0.1:<port> URL the renderer must connect to. Any user-set
+      // webSocket override is honoured by treating non-empty values as a
+      // direct relay; an empty value triggers the local proxy path.
+      // main から返ってくる WebSocket URL を採掘設定にマージしてから採掘開始。
+      // 空欄ならローカルプロキシ、明示指定があれば外部リレーを使う。
+      const { webSocket } = await window.miner.startMining(config);
+      if (generation !== this.startGeneration) {
+        // Stop was pressed during the proxy bootstrap await. Tell main to
+        // drop the started state and skip the local miner.start() — without
+        // this guard the CPU miner kicks off after explicit user cancel.
+        // bootstrap 中に Stop が押された場合、main 側も停止させて自分は始めない。
+        void window.miner.stopMining();
+        return;
+      }
+      const effectiveConfig: MinerConfig = {
+        ...config,
+        webSocket: config.webSocket === '' ? webSocket : config.webSocket,
+      };
+      await this.miner.start(effectiveConfig);
     } catch (cause) {
       console.error('[renderer] startMining failed:', cause);
-      this.showToast(this.i18n.messages().toastStartFailed, 'error');
+      if (generation === this.startGeneration) {
+        this.showToast(this.i18n.messages().toastStartFailed, 'error');
+      }
     }
   }
 
@@ -239,7 +285,10 @@ class App {
     requireElement<HTMLElement>('help-wallet').textContent = m.fieldWalletHelp;
     requireElement<HTMLElement>('label-worker').textContent = m.fieldWorkerId;
     requireElement<HTMLElement>('label-pool').textContent = m.fieldPool;
+    requireElement<HTMLElement>('help-pool').textContent = m.fieldPoolHelp;
     requireElement<HTMLElement>('label-ws').textContent = m.fieldWebSocket;
+    requireElement<HTMLElement>('help-ws').textContent = m.fieldWebSocketHelp;
+    requireElement<HTMLElement>('advanced-summary').textContent = m.advancedSummary;
     requireElement<HTMLElement>('label-threads').textContent = m.fieldThreads;
     requireElement<HTMLElement>('label-throttle').textContent = m.fieldThrottle;
     requireElement<HTMLElement>('help-throttle').textContent = m.fieldThrottleHelp;

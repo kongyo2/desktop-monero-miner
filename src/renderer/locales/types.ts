@@ -11,7 +11,10 @@ export type Messages = {
   fieldWalletHelp: string;
   fieldWorkerId: string;
   fieldPool: string;
+  fieldPoolHelp: string;
   fieldWebSocket: string;
+  fieldWebSocketHelp: string;
+  advancedSummary: string;
   fieldThreads: string;
   fieldThrottle: string;
   fieldThrottleHelp: string;
@@ -43,6 +46,7 @@ export type Messages = {
   errorThreadsRange: string;
   errorThrottleRange: string;
   errorPoolEmpty: string;
+  errorPoolEndpointInvalid: string;
   errorWebsocketInvalid: string;
   warningMining: string;
   attributionTitle: string;

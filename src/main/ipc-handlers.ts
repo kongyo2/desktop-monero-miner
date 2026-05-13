@@ -18,19 +18,44 @@ import {
   setPreferencesPayloadSchema,
 } from '../shared/ipc.ts';
 import type { ConfigStore } from './config-store.ts';
+import type { StratumProxy } from './stratum-proxy.ts';
 
 export class MiningCoordinator {
   private status: MiningStatus = 'idle';
 
-  public constructor(private readonly getWindow: () => BrowserWindow | null) {}
+  public constructor(
+    private readonly getWindow: () => BrowserWindow | null,
+    private readonly proxy: StratumProxy,
+  ) {}
 
   public getStatus(): MiningStatus {
     return this.status;
   }
 
-  public start(_config: MinerConfig): void {
+  public async start(config: MinerConfig): Promise<string> {
     this.status = 'starting';
     this.broadcast({ status: this.status });
+    try {
+      // Skip the bundled proxy entirely when the user has supplied an
+      // external WebSocket override. The documented override path is meant
+      // to be independent: bind failures on the loopback proxy must not
+      // abort a session that never planned to use it.
+      // 外部 WebSocket リレーが指定されている場合は同梱プロキシを起動しない。
+      // ローカル bind 失敗で外部リレー利用までブロックされないようにする。
+      if (config.webSocket !== '') {
+        return config.webSocket;
+      }
+      return await this.proxy.start();
+    } catch (cause) {
+      // Without this, the renderer stays stuck on 'starting' forever when
+      // proxy.start() rejects — the user has no signal that anything failed
+      // until they manually press Stop.
+      // ここで失敗を反映しないと UI が starting のまま固まる。
+      const message = cause instanceof Error ? cause.message : String(cause);
+      this.status = 'error';
+      this.broadcast({ status: 'error', message });
+      throw cause;
+    }
   }
 
   public stop(): void {
@@ -55,6 +80,7 @@ export function registerIpcHandlers(
   store: ConfigStore,
   coordinator: MiningCoordinator,
   appVersion: string,
+  proxy: StratumProxy,
 ): void {
   ipcMain.handle(IpcChannel.GetConfig, (): PersistedState['config'] => {
     return store.getConfig();
@@ -74,11 +100,14 @@ export function registerIpcHandlers(
     return store.updatePreferences(patch);
   });
 
-  ipcMain.handle(IpcChannel.StartMining, (_event, raw: unknown): MiningStatus => {
-    const config = minerConfigSchema.parse(raw);
-    coordinator.start(config);
-    return coordinator.getStatus();
-  });
+  ipcMain.handle(
+    IpcChannel.StartMining,
+    async (_event, raw: unknown): Promise<{ status: MiningStatus; webSocket: string }> => {
+      const config = minerConfigSchema.parse(raw);
+      const address = await coordinator.start(config);
+      return { status: coordinator.getStatus(), webSocket: address };
+    },
+  );
 
   ipcMain.handle(IpcChannel.StopMining, (): MiningStatus => {
     coordinator.stop();
@@ -109,4 +138,10 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle(IpcChannel.AppVersion, (): string => appVersion);
+
+  ipcMain.handle(IpcChannel.ProxyAddress, async (): Promise<string> => {
+    // Boot the proxy lazily on first request; subsequent calls reuse it.
+    // 最初の呼び出しで起動し、以降は同じインスタンスを返す。
+    return proxy.start();
+  });
 }

@@ -18,31 +18,77 @@ export const moneroAddressSchema = z
 export const localeSchema = z.enum(['ja', 'en']);
 export type Locale = z.infer<typeof localeSchema>;
 
-const wsUrlSchema = z
+/**
+ * moneroocean.stream's auto-diff plain-TCP port. Used as both the default for
+ * fresh configs and the fallback port when migrating bare-hostname pool values
+ * persisted by pre-proxy releases of the app.
+ * 既定ポート（moneroocean.stream の auto-diff）。新規設定の既定値と、旧バージョンの
+ * ホスト名のみの pool 値を補正する際の代替ポートを兼ねる。
+ */
+export const DEFAULT_STRATUM_PORT = 10128;
+
+/**
+ * Stratum endpoint accepted by the bundled local proxy. Format is
+ * "host:port" or "host:port:tls". The proxy opens a raw TCP socket (or TLS
+ * when the third token is "tls"/"ssl") to this host and translates between
+ * the upstream miner-script WebSocket protocol and Cryptonote Stratum.
+ * ローカルプロキシが解釈する Stratum エンドポイント。"host:port" もしくは
+ * "host:port:tls" 形式で指定する。
+ */
+const stratumEndpointSchema = z
   .string()
   .trim()
-  .url()
-  .refine((value) => value.startsWith('ws://') || value.startsWith('wss://'), {
-    message: 'websocket_url_invalid_scheme',
-  })
+  .min(1)
   .refine(
     (value) => {
-      // WebSocket URLs with a fragment are not addressable and break at connect time.
-      // フラグメント付きの WebSocket URL は接続時に失敗するため事前に弾く。
+      const parts = value.split(':');
+      if (parts.length < 2 || parts.length > 3) return false;
+      const [host, portStr, flag] = parts;
+      if (!host || !portStr) return false;
+      const port = Number(portStr);
+      if (!Number.isInteger(port) || port <= 0 || port >= 65536) return false;
+      if (flag !== undefined && flag !== '' && flag !== 'tls' && flag !== 'ssl') return false;
+      return true;
+    },
+    { message: 'pool_endpoint_invalid' },
+  );
+
+const optionalWsUrlSchema = z
+  .string()
+  .trim()
+  .default('')
+  .refine(
+    (value) => {
+      // Empty means "use the bundled local proxy"; the main process will
+      // inject its own ws://127.0.0.1:<port> URL at start time. Explicit
+      // overrides must use wss:// — the CSP connect-src directive only
+      // allows wss: and the loopback ws://127.0.0.1:*, so a non-loopback
+      // ws:// URL would validate but be blocked at runtime by the browser.
+      // 空欄はローカルプロキシ。明示上書きは wss:// 必須。CSP は wss: と
+      // ループバックのみ許可しており、外部 ws:// は実行時に CSP で弾かれる。
+      if (value === '') return true;
       try {
-        return new URL(value).hash === '';
+        const url = new URL(value);
+        if (url.protocol !== 'wss:') return false;
+        return url.hash === '';
       } catch {
         return false;
       }
     },
-    { message: 'websocket_url_fragment_not_allowed' },
+    { message: 'websocket_url_invalid' },
   );
 
 export const minerConfigSchema = z.object({
   walletAddress: moneroAddressSchema,
   workerId: z.string().trim().min(1).max(64).default('Desktop-Miner'),
-  pool: z.string().trim().min(1).default('moneroocean.stream'),
-  webSocket: wsUrlSchema.default('wss://ny1.xmrminingproxy.com'),
+  // Default pool: gulf.moneroocean.stream over plain TCP on the auto-diff
+  // port. The upstream worker only supports CryptoNight family algorithms; if
+  // the chosen pool serves RandomX jobs the proxy surfaces an unsupported_algo
+  // error so the user sees a clear signal instead of a silent stall.
+  // 既定プール: moneroocean.stream の auto-diff ポート。CN 系のみ対応で、
+  // RandomX ジョブが届いた場合はプロキシ側で明示的に拒否を返す。
+  pool: stratumEndpointSchema.default(`gulf.moneroocean.stream:${DEFAULT_STRATUM_PORT}`),
+  webSocket: optionalWsUrlSchema,
   threads: z.number().int().min(1).max(256).default(2),
   throttle: z.number().int().min(0).max(99).default(20),
   password: z.string().default(''),

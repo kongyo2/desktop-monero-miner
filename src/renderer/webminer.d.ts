@@ -1,47 +1,37 @@
 declare global {
   type StartMiningFn = (
     pool: string,
-    walletAddress: string,
-    workerId: string,
-    threads: number,
+    login: string,
     password: string,
+    threads: number,
+    userid: string,
   ) => void;
 
   type StopMiningFn = () => void;
 
-  type GetHashesPerSecondFn = () => number;
-  type GetTotalHashesFn = () => number;
-  type GetAcceptedHashesFn = () => number;
-  type GetRejectedHashesFn = () => number;
+  // Globals populated by https://cdn.jsdelivr.net/gh/NajmAjmal/monero-webminer@<pinned>/script.js
+  // The upstream script intentionally exports onto the global scope rather
+  // than a namespaced object. Only the values listed below are read or written
+  // from the host application; everything else is treated as opaque.
+  // 上流スクリプトはグローバルスコープに直接シンボルを定義する。アプリ側で
+  // 参照・更新するのは以下に列挙したものだけで、それ以外は不透明として扱う。
 
-  // Globals populated by https://cdn.jsdelivr.net/gh/NajmAjmal/monero-webminer@main/script.js
-  // 上記スクリプトが renderer 上で生成するグローバル定義。
   // eslint-disable-next-line vars-on-top, no-var
   var server: string | undefined;
   // eslint-disable-next-line vars-on-top, no-var
-  var pool: string | undefined;
-  // eslint-disable-next-line vars-on-top, no-var
-  var walletAddress: string | undefined;
-  // eslint-disable-next-line vars-on-top, no-var
-  var workerId: string | undefined;
-  // eslint-disable-next-line vars-on-top, no-var
-  var threads: number | string | undefined;
-  // eslint-disable-next-line vars-on-top, no-var
-  var password: string | undefined;
-  // eslint-disable-next-line vars-on-top, no-var
   var throttleMiner: number | undefined;
+  // eslint-disable-next-line vars-on-top, no-var
+  var totalhashes: number | undefined;
+  // eslint-disable-next-line vars-on-top, no-var
+  var sendStack: unknown[] | undefined;
+  // eslint-disable-next-line vars-on-top, no-var
+  var receiveStack: unknown[] | undefined;
+  // eslint-disable-next-line vars-on-top, no-var
+  var wasmSupported: boolean | undefined;
   // eslint-disable-next-line vars-on-top, no-var
   var startMining: StartMiningFn | undefined;
   // eslint-disable-next-line vars-on-top, no-var
   var stopMining: StopMiningFn | undefined;
-  // eslint-disable-next-line vars-on-top, no-var
-  var getHashesPerSecond: GetHashesPerSecondFn | undefined;
-  // eslint-disable-next-line vars-on-top, no-var
-  var getTotalHashes: GetTotalHashesFn | undefined;
-  // eslint-disable-next-line vars-on-top, no-var
-  var getAcceptedHashes: GetAcceptedHashesFn | undefined;
-  // eslint-disable-next-line vars-on-top, no-var
-  var getRejectedHashes: GetRejectedHashesFn | undefined;
 }
 
 export {};

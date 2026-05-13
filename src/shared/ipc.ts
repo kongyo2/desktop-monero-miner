@@ -19,6 +19,7 @@ export const IpcChannel = {
   ReportStats: 'mining:stats',
   OpenExternal: 'shell:open-external',
   AppVersion: 'app:version',
+  ProxyAddress: 'proxy:address',
 } as const;
 
 export type IpcChannelName = (typeof IpcChannel)[keyof typeof IpcChannel];
