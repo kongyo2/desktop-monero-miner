@@ -1,0 +1,53 @@
+{
+  "name": "desktop-monero-miner",
+  "version": "0.1.0",
+  "description": "Desktop Monero (XMR) miner built with Electron, TypeScript, and Zod. / Electron・TypeScript・Zod で構築したデスクトップ向け Monero マイナー。",
+  "main": "dist/main/index.js",
+  "author": "kongyo2",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kongyo2/desktop-monero-miner.git"
+  },
+  "keywords": [
+    "monero",
+    "xmr",
+    "miner",
+    "mining",
+    "electron",
+    "typescript",
+    "zod",
+    "desktop"
+  ],
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "build:watch": "node ./scripts/build.mjs --watch",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && electron . --enable-logging",
+    "typecheck": "tsc --noEmit",
+    "typecheck:watch": "tsc --noEmit --watch",
+    "lint": "oxlint --silent",
+    "lint:strict": "oxlint --deny-warnings",
+    "check:file": "oxlint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run typecheck && npm run lint:strict && npm run format:check",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "electron-store": "^10.0.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "electron": "^33.2.1",
+    "esbuild": "^0.24.2",
+    "oxlint": "^0.15.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2"
+  }
+}

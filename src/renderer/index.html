@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Desktop Monero Miner</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="app__header">
+        <h1 id="app-title">Desktop Monero Miner</h1>
+        <p id="app-tagline" class="app__tagline"></p>
+        <label class="lang">
+          <span id="lang-label">Language</span>
+          <select id="lang-select">
+            <option value="ja">日本語</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+      </header>
+
+      <section class="card" aria-labelledby="section-status-title">
+        <h2 id="section-status-title">Status</h2>
+        <div class="status-row">
+          <span id="status-dot" class="dot dot--idle" aria-hidden="true"></span>
+          <span id="status-text">Idle</span>
+        </div>
+        <dl class="stats" aria-live="polite">
+          <div class="stats__item">
+            <dt id="stat-hashrate-label">Hashrate</dt>
+            <dd><span id="stat-hashrate">0</span> <span id="stat-hashrate-unit">H/s</span></dd>
+          </div>
+          <div class="stats__item">
+            <dt id="stat-accepted-label">Accepted</dt>
+            <dd id="stat-accepted">0</dd>
+          </div>
+          <div class="stats__item">
+            <dt id="stat-rejected-label">Rejected</dt>
+            <dd id="stat-rejected">0</dd>
+          </div>
+          <div class="stats__item">
+            <dt id="stat-total-label">Total hashes</dt>
+            <dd id="stat-total">0</dd>
+          </div>
+          <div class="stats__item">
+            <dt id="stat-uptime-label">Uptime</dt>
+            <dd id="stat-uptime">0s</dd>
+          </div>
+        </dl>
+        <div class="actions">
+          <button id="btn-start" class="btn btn--primary" type="button">Start</button>
+          <button id="btn-stop" class="btn" type="button" disabled>Stop</button>
+          <button id="btn-reset" class="btn btn--ghost" type="button">Reset</button>
+        </div>
+        <p id="warn-mining" class="warn"></p>
+      </section>
+
+      <section class="card" aria-labelledby="section-config-title">
+        <h2 id="section-config-title">Configuration</h2>
+        <form id="config-form" class="form" novalidate>
+          <div class="form__row">
+            <label for="field-wallet" id="label-wallet">Wallet Address</label>
+            <input
+              id="field-wallet"
+              name="walletAddress"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              required
+            />
+            <small id="help-wallet" class="help"></small>
+            <small class="error" data-error-for="walletAddress"></small>
+          </div>
+          <div class="form__row">
+            <label for="field-worker" id="label-worker">Worker ID</label>
+            <input
+              id="field-worker"
+              name="workerId"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <small class="error" data-error-for="workerId"></small>
+          </div>
+          <div class="form__row form__row--inline">
+            <div>
+              <label for="field-pool" id="label-pool">Pool</label>
+              <input id="field-pool" name="pool" type="text" autocomplete="off" />
+              <small class="error" data-error-for="pool"></small>
+            </div>
+            <div>
+              <label for="field-ws" id="label-ws">WebSocket</label>
+              <input id="field-ws" name="webSocket" type="url" autocomplete="off" />
+              <small class="error" data-error-for="webSocket"></small>
+            </div>
+          </div>
+          <div class="form__row form__row--inline">
+            <div>
+              <label for="field-threads" id="label-threads">Threads</label>
+              <input id="field-threads" name="threads" type="number" min="1" max="256" step="1" />
+              <small class="error" data-error-for="threads"></small>
+            </div>
+            <div>
+              <label for="field-throttle" id="label-throttle">Throttle</label>
+              <input id="field-throttle" name="throttle" type="number" min="0" max="99" step="1" />
+              <small id="help-throttle" class="help"></small>
+              <small class="error" data-error-for="throttle"></small>
+            </div>
+          </div>
+          <div class="form__row">
+            <label for="field-password" id="label-password">Password</label>
+            <input
+              id="field-password"
+              name="password"
+              type="password"
+              autocomplete="new-password"
+            />
+          </div>
+          <div class="form__row form__row--checkbox">
+            <label>
+              <input id="field-autostart" type="checkbox" />
+              <span id="label-autostart">Auto start</span>
+            </label>
+          </div>
+          <div class="actions">
+            <button id="btn-save" class="btn btn--primary" type="submit">Save</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card" aria-labelledby="section-about-title">
+        <h2 id="section-about-title">About</h2>
+        <p id="attribution-description"></p>
+        <p class="muted">
+          <span id="version-label">Version</span>:
+          <span id="version-value">0.0.0</span>
+        </p>
+        <div class="actions">
+          <button id="btn-open-source" class="btn btn--ghost" type="button">View source</button>
+        </div>
+      </section>
+
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    </main>
+
+    <script type="module" src="./index.js"></script>
+  </body>
+</html>

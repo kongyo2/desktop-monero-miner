@@ -1,0 +1,338 @@
+import { z } from 'zod';
+
+import {
+  type Locale,
+  type MinerConfig,
+  type MiningStatus,
+  minerConfigSchema,
+} from '../shared/config-schema.ts';
+import type { MiningStateUpdate } from '../shared/ipc.ts';
+import { formatHashrate, formatInteger, requireElement } from './dom.ts';
+import { I18n, detectInitialLocale } from './i18n.ts';
+import { WebMiner } from './miner.ts';
+
+import './global.d.ts';
+
+const SOURCE_URL = 'https://github.com/kongyo2/desktop-monero-miner';
+
+type FieldName =
+  | 'walletAddress'
+  | 'workerId'
+  | 'pool'
+  | 'webSocket'
+  | 'threads'
+  | 'throttle'
+  | 'password';
+
+const defaults: MinerConfig = minerConfigSchema.parse({
+  walletAddress: '4'.padEnd(95, '1'),
+  workerId: 'Desktop-Miner',
+  pool: 'moneroocean.stream',
+  webSocket: 'wss://ny1.xmrminingproxy.com',
+  threads: 2,
+  throttle: 20,
+  password: '',
+});
+
+class App {
+  private readonly i18n: I18n;
+  private readonly miner: WebMiner;
+  private currentConfig: MinerConfig = defaults;
+  private autoStart = false;
+  private toastTimer: number | null = null;
+
+  public constructor(locale: Locale) {
+    this.i18n = new I18n(locale);
+    this.miner = new WebMiner({
+      onUpdate: (update) => this.handleUpdate(update),
+    });
+  }
+
+  public async initialize(): Promise<void> {
+    const [persistedConfig, prefs, version] = await Promise.all([
+      window.miner.getConfig(),
+      window.miner.getPreferences(),
+      window.miner.appVersion(),
+    ]);
+
+    this.i18n.setLocale(prefs.locale);
+    this.autoStart = prefs.autoStart;
+
+    const merged = { ...defaults, ...persistedConfig };
+    const parsed = minerConfigSchema.safeParse(merged);
+    this.currentConfig = parsed.success ? parsed.data : defaults;
+
+    this.fillForm(this.currentConfig);
+    this.renderVersion(version);
+    this.bindLanguage();
+    this.bindForm();
+    this.bindActions();
+    this.applyLocaleStrings();
+    this.i18n.onChange(() => this.applyLocaleStrings());
+
+    if (this.autoStart && parsed.success) {
+      void this.startMining(parsed.data);
+    }
+  }
+
+  private bindLanguage(): void {
+    const select = requireElement<HTMLSelectElement>('lang-select');
+    select.value = this.i18n.getLocale();
+    select.addEventListener('change', () => {
+      const next = select.value === 'en' ? 'en' : 'ja';
+      this.i18n.setLocale(next);
+      void window.miner.setPreferences({ locale: next });
+    });
+  }
+
+  private bindForm(): void {
+    const form = requireElement<HTMLFormElement>('config-form');
+    const autostart = requireElement<HTMLInputElement>('field-autostart');
+    autostart.checked = this.autoStart;
+    autostart.addEventListener('change', () => {
+      this.autoStart = autostart.checked;
+      void window.miner.setPreferences({ autoStart: autostart.checked });
+    });
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const config = this.readForm();
+      if (!config) return;
+      this.currentConfig = config;
+      void window.miner.setConfig(config).then(() => {
+        this.showToast(this.i18n.messages().toastSaved, 'success');
+      });
+    });
+  }
+
+  private bindActions(): void {
+    requireElement<HTMLButtonElement>('btn-start').addEventListener('click', () => {
+      const config = this.readForm();
+      if (!config) return;
+      this.currentConfig = config;
+      void this.startMining(config);
+    });
+
+    requireElement<HTMLButtonElement>('btn-stop').addEventListener('click', () => {
+      this.miner.stop();
+      void window.miner.stopMining();
+      this.showToast(this.i18n.messages().toastStopped, 'success');
+    });
+
+    requireElement<HTMLButtonElement>('btn-reset').addEventListener('click', () => {
+      this.miner.resetStats();
+    });
+
+    requireElement<HTMLButtonElement>('btn-open-source').addEventListener('click', () => {
+      void window.miner.openExternal(SOURCE_URL);
+    });
+  }
+
+  private async startMining(config: MinerConfig): Promise<void> {
+    try {
+      await window.miner.setConfig(config);
+      await window.miner.startMining(config);
+      await this.miner.start(config);
+    } catch (cause) {
+      console.error('[renderer] startMining failed:', cause);
+      this.showToast(this.i18n.messages().toastStartFailed, 'error');
+    }
+  }
+
+  private readForm(): MinerConfig | null {
+    const raw: Record<FieldName, unknown> = {
+      walletAddress: this.fieldValue('field-wallet'),
+      workerId: this.fieldValue('field-worker'),
+      pool: this.fieldValue('field-pool'),
+      webSocket: this.fieldValue('field-ws'),
+      threads: numberFromValue(this.fieldValue('field-threads')),
+      throttle: numberFromValue(this.fieldValue('field-throttle')),
+      password: this.fieldValue('field-password'),
+    };
+
+    this.clearErrors();
+    const result = minerConfigSchema.safeParse(raw);
+    if (!result.success) {
+      this.showZodErrors(result.error);
+      this.showToast(this.i18n.messages().toastValidationFailed, 'error');
+      return null;
+    }
+    return result.data;
+  }
+
+  private fillForm(config: MinerConfig): void {
+    setInputValue('field-wallet', config.walletAddress);
+    setInputValue('field-worker', config.workerId);
+    setInputValue('field-pool', config.pool);
+    setInputValue('field-ws', config.webSocket);
+    setInputValue('field-threads', String(config.threads));
+    setInputValue('field-throttle', String(config.throttle));
+    setInputValue('field-password', config.password);
+  }
+
+  private fieldValue(id: string): string {
+    return requireElement<HTMLInputElement>(id).value.trim();
+  }
+
+  private clearErrors(): void {
+    for (const el of document.querySelectorAll<HTMLElement>('[data-error-for]')) {
+      el.textContent = '';
+    }
+  }
+
+  private showZodErrors(error: z.ZodError): void {
+    for (const issue of error.issues) {
+      const [field] = issue.path;
+      if (typeof field !== 'string') continue;
+      const target = document.querySelector<HTMLElement>(`[data-error-for="${field}"]`);
+      if (!target) continue;
+      const code = this.i18n.translateError(issue.message);
+      target.textContent = code || issue.message;
+    }
+  }
+
+  private renderVersion(version: string): void {
+    requireElement<HTMLElement>('version-value').textContent = version;
+  }
+
+  private applyLocaleStrings(): void {
+    const m = this.i18n.messages();
+    document.documentElement.lang = this.i18n.getLocale();
+    document.title = m.appTitle;
+    requireElement<HTMLElement>('app-title').textContent = m.appTitle;
+    requireElement<HTMLElement>('app-tagline').textContent = m.tagline;
+    requireElement<HTMLElement>('lang-label').textContent = m.language;
+
+    requireElement<HTMLElement>('section-status-title').textContent = m.sectionStatus;
+    requireElement<HTMLElement>('section-config-title').textContent = m.sectionConfig;
+    requireElement<HTMLElement>('section-about-title').textContent = m.sectionAbout;
+
+    requireElement<HTMLElement>('label-wallet').textContent = m.fieldWallet;
+    requireElement<HTMLElement>('help-wallet').textContent = m.fieldWalletHelp;
+    requireElement<HTMLElement>('label-worker').textContent = m.fieldWorkerId;
+    requireElement<HTMLElement>('label-pool').textContent = m.fieldPool;
+    requireElement<HTMLElement>('label-ws').textContent = m.fieldWebSocket;
+    requireElement<HTMLElement>('label-threads').textContent = m.fieldThreads;
+    requireElement<HTMLElement>('label-throttle').textContent = m.fieldThrottle;
+    requireElement<HTMLElement>('help-throttle').textContent = m.fieldThrottleHelp;
+    requireElement<HTMLElement>('label-password').textContent = m.fieldPassword;
+    requireElement<HTMLElement>('label-autostart').textContent = m.fieldAutoStart;
+
+    requireElement<HTMLElement>('btn-start').textContent = m.buttonStart;
+    requireElement<HTMLElement>('btn-stop').textContent = m.buttonStop;
+    requireElement<HTMLElement>('btn-save').textContent = m.buttonSave;
+    requireElement<HTMLElement>('btn-reset').textContent = m.buttonReset;
+    requireElement<HTMLElement>('btn-open-source').textContent = m.buttonOpenSource;
+
+    requireElement<HTMLElement>('stat-hashrate-label').textContent = m.statHashrate;
+    requireElement<HTMLElement>('stat-hashrate-unit').textContent = m.unitHashrate;
+    requireElement<HTMLElement>('stat-accepted-label').textContent = m.statAccepted;
+    requireElement<HTMLElement>('stat-rejected-label').textContent = m.statRejected;
+    requireElement<HTMLElement>('stat-total-label').textContent = m.statTotalHashes;
+    requireElement<HTMLElement>('stat-uptime-label').textContent = m.statUptime;
+
+    requireElement<HTMLElement>('warn-mining').textContent = m.warningMining;
+    requireElement<HTMLElement>('attribution-description').textContent = m.attributionDescription;
+    requireElement<HTMLElement>('version-label').textContent = m.versionLabel;
+
+    this.handleUpdate({ status: this.miner.getStatus(), stats: this.miner.getStats() });
+  }
+
+  private handleUpdate(update: MiningStateUpdate): void {
+    const m = this.i18n.messages();
+    const statusText = statusToText(update.status, m);
+    requireElement<HTMLElement>('status-text').textContent = statusText;
+
+    const dot = requireElement<HTMLElement>('status-dot');
+    dot.className = `dot dot--${update.status}`;
+
+    const startBtn = requireElement<HTMLButtonElement>('btn-start');
+    const stopBtn = requireElement<HTMLButtonElement>('btn-stop');
+    const running = update.status === 'running' || update.status === 'starting';
+    startBtn.disabled = running;
+    stopBtn.disabled = !running;
+
+    const stats = update.stats ?? this.miner.getStats();
+    requireElement<HTMLElement>('stat-hashrate').textContent = formatHashrate(
+      stats.hashrate,
+      '',
+    ).trim();
+    requireElement<HTMLElement>('stat-accepted').textContent = formatInteger(stats.acceptedShares);
+    requireElement<HTMLElement>('stat-rejected').textContent = formatInteger(stats.rejectedShares);
+    requireElement<HTMLElement>('stat-total').textContent = formatInteger(stats.totalHashes);
+    const { hours, minutes, seconds } = splitDuration(stats.uptimeSec);
+    requireElement<HTMLElement>('stat-uptime').textContent = m.unitDuration(
+      hours,
+      minutes,
+      seconds,
+    );
+
+    window.miner.reportStats({ status: update.status, stats, ...maybeMessage(update.message) });
+  }
+
+  private showToast(text: string, kind: 'success' | 'error' = 'success'): void {
+    const el = requireElement<HTMLElement>('toast');
+    el.textContent = text;
+    el.classList.remove('toast--success', 'toast--error');
+    el.classList.add(`toast--${kind}`, 'is-visible');
+    if (this.toastTimer !== null) window.clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => {
+      el.classList.remove('is-visible');
+    }, 2400);
+  }
+}
+
+function maybeMessage(message: string | undefined): { message?: string } {
+  if (message === undefined) return {};
+  return { message };
+}
+
+function setInputValue(id: string, value: string): void {
+  requireElement<HTMLInputElement>(id).value = value;
+}
+
+function numberFromValue(value: string): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : Number.NaN;
+}
+
+function splitDuration(totalSeconds: number): {
+  hours: number;
+  minutes: number;
+  seconds: number;
+} {
+  const total = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  return { hours, minutes, seconds };
+}
+
+function statusToText(status: MiningStatus, m: ReturnType<I18n['messages']>): string {
+  switch (status) {
+    case 'idle':
+      return m.statusIdle;
+    case 'starting':
+      return m.statusStarting;
+    case 'running':
+      return m.statusRunning;
+    case 'stopping':
+      return m.statusStopping;
+    case 'error':
+      return m.statusError;
+  }
+}
+
+async function bootstrap(): Promise<void> {
+  const prefs = await window.miner.getPreferences().catch(() => ({
+    locale: undefined as Locale | undefined,
+    autoStart: false,
+  }));
+  const locale = detectInitialLocale(prefs.locale ?? undefined);
+  const app = new App(locale);
+  await app.initialize();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  void bootstrap();
+});
