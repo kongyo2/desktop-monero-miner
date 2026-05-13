@@ -44,6 +44,7 @@ export class I18n {
       case 'wallet_address_invalid_length':
         return m.errorWalletInvalidLength;
       case 'websocket_url_invalid_scheme':
+      case 'websocket_url_fragment_not_allowed':
         return m.errorWebsocketInvalid;
       default:
         return code;

@@ -24,7 +24,19 @@ const wsUrlSchema = z
   .url()
   .refine((value) => value.startsWith('ws://') || value.startsWith('wss://'), {
     message: 'websocket_url_invalid_scheme',
-  });
+  })
+  .refine(
+    (value) => {
+      // WebSocket URLs with a fragment are not addressable and break at connect time.
+      // フラグメント付きの WebSocket URL は接続時に失敗するため事前に弾く。
+      try {
+        return new URL(value).hash === '';
+      } catch {
+        return false;
+      }
+    },
+    { message: 'websocket_url_fragment_not_allowed' },
+  );
 
 export const minerConfigSchema = z.object({
   walletAddress: moneroAddressSchema,

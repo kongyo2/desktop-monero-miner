@@ -168,7 +168,10 @@ class App {
       webSocket: this.fieldValue('field-ws'),
       threads: numberFromValue(this.fieldValue('field-threads')),
       throttle: numberFromValue(this.fieldValue('field-throttle')),
-      password: this.fieldValue('field-password'),
+      // Pool passwords are opaque credentials — whitespace can be significant,
+      // so read the raw value without trimming.
+      // プールパスワードは不透明な認証情報のため、空白文字を保持して trim しない。
+      password: this.rawFieldValue('field-password'),
     };
 
     this.clearErrors();
@@ -193,6 +196,10 @@ class App {
 
   private fieldValue(id: string): string {
     return requireElement<HTMLInputElement>(id).value.trim();
+  }
+
+  private rawFieldValue(id: string): string {
+    return requireElement<HTMLInputElement>(id).value;
   }
 
   private clearErrors(): void {
@@ -313,6 +320,11 @@ function setInputValue(id: string, value: string): void {
 }
 
 function numberFromValue(value: string): number {
+  // Empty input must not silently coerce to 0 — Number('') is 0 which would
+  // pass `z.number().int().min(0)` and silently mean "0% throttle / 0 threads".
+  // Empty 入力を 0 に解釈してしまうと、ユーザーが空欄にしただけで
+  // throttle=0（全力採掘）として保存・起動されてしまうため NaN を返す。
+  if (value === '') return Number.NaN;
   const n = Number(value);
   return Number.isFinite(n) ? n : Number.NaN;
 }
