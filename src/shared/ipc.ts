@@ -15,11 +15,11 @@ export const IpcChannel = {
   SetPreferences: 'prefs:set',
   StartMining: 'mining:start',
   StopMining: 'mining:stop',
+  ResetStats: 'mining:reset-stats',
   GetMiningStatus: 'mining:status',
-  ReportStats: 'mining:stats',
+  StateUpdate: 'mining:state-update',
   OpenExternal: 'shell:open-external',
   AppVersion: 'app:version',
-  ProxyAddress: 'proxy:address',
 } as const;
 
 export type IpcChannelName = (typeof IpcChannel)[keyof typeof IpcChannel];

@@ -3,6 +3,7 @@ import { type BrowserWindow, type IpcMain, shell } from 'electron';
 import {
   type AppPreferences,
   type MinerConfig,
+  type MiningStats,
   type MiningStatus,
   type PersistedState,
   minerConfigSchema,
@@ -12,67 +13,74 @@ import {
   IpcChannel,
   type MiningStateUpdate,
   isSafeExternalUrl,
-  miningStateUpdateSchema,
   openExternalPayloadSchema,
   setConfigPayloadSchema,
   setPreferencesPayloadSchema,
 } from '../shared/ipc.ts';
 import type { ConfigStore } from './config-store.ts';
-import type { StratumProxy } from './stratum-proxy.ts';
+import type { XmrigRunner, XmrigUpdate } from './xmrig-runner.ts';
 
 export class MiningCoordinator {
   private status: MiningStatus = 'idle';
+  private stats: MiningStats = emptyStats();
+  private lastMessage: string | undefined;
 
   public constructor(
     private readonly getWindow: () => BrowserWindow | null,
-    private readonly proxy: StratumProxy,
-  ) {}
+    private readonly runner: XmrigRunner,
+  ) {
+    runner.onUpdate((update) => this.onRunnerUpdate(update));
+  }
 
   public getStatus(): MiningStatus {
     return this.status;
   }
 
-  public async start(config: MinerConfig): Promise<string> {
-    this.status = 'starting';
-    this.broadcast({ status: this.status });
-    try {
-      // Skip the bundled proxy entirely when the user has supplied an
-      // external WebSocket override. The documented override path is meant
-      // to be independent: bind failures on the loopback proxy must not
-      // abort a session that never planned to use it.
-      // 外部 WebSocket リレーが指定されている場合は同梱プロキシを起動しない。
-      // ローカル bind 失敗で外部リレー利用までブロックされないようにする。
-      if (config.webSocket !== '') {
-        return config.webSocket;
-      }
-      return await this.proxy.start();
-    } catch (cause) {
-      // Without this, the renderer stays stuck on 'starting' forever when
-      // proxy.start() rejects — the user has no signal that anything failed
-      // until they manually press Stop.
-      // ここで失敗を反映しないと UI が starting のまま固まる。
-      const message = cause instanceof Error ? cause.message : String(cause);
-      this.status = 'error';
-      this.broadcast({ status: 'error', message });
-      throw cause;
-    }
+  public snapshot(): MiningStateUpdate {
+    const update: MiningStateUpdate = { status: this.status, stats: { ...this.stats } };
+    if (this.lastMessage !== undefined) update.message = this.lastMessage;
+    return update;
   }
 
-  public stop(): void {
-    this.status = 'stopping';
-    this.broadcast({ status: this.status });
+  public async start(config: MinerConfig): Promise<void> {
+    this.lastMessage = undefined;
+    // The runner publishes its own 'error' transition through onUpdate when
+    // start() rejects, so we don't intercept the failure here — letting it
+    // bubble is what makes the renderer's invoke() reject so it can toast.
+    // 失敗時に runner が onUpdate 経由で error 状態を流すので、ここでは握り潰さず素通しする。
+    await this.runner.start(config);
   }
 
-  public onRendererUpdate(update: MiningStateUpdate): void {
+  public async stop(): Promise<void> {
+    await this.runner.stop();
+  }
+
+  public resetStats(): void {
+    this.runner.resetStats();
+  }
+
+  private onRunnerUpdate(update: XmrigUpdate): void {
     this.status = update.status;
-    this.broadcast(update);
+    this.stats = { ...update.stats };
+    this.lastMessage = update.message;
+    this.broadcast(this.snapshot());
   }
 
   private broadcast(update: MiningStateUpdate): void {
     const win = this.getWindow();
     if (!win || win.isDestroyed()) return;
-    win.webContents.send(IpcChannel.ReportStats, update);
+    win.webContents.send(IpcChannel.StateUpdate, update);
   }
+}
+
+function emptyStats(): MiningStats {
+  return {
+    hashrate: 0,
+    acceptedShares: 0,
+    rejectedShares: 0,
+    totalHashes: 0,
+    uptimeSec: 0,
+  };
 }
 
 export function registerIpcHandlers(
@@ -80,7 +88,6 @@ export function registerIpcHandlers(
   store: ConfigStore,
   coordinator: MiningCoordinator,
   appVersion: string,
-  proxy: StratumProxy,
 ): void {
   ipcMain.handle(IpcChannel.GetConfig, (): PersistedState['config'] => {
     return store.getConfig();
@@ -102,30 +109,25 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     IpcChannel.StartMining,
-    async (_event, raw: unknown): Promise<{ status: MiningStatus; webSocket: string }> => {
+    async (_event, raw: unknown): Promise<MiningStateUpdate> => {
       const config = minerConfigSchema.parse(raw);
-      const address = await coordinator.start(config);
-      return { status: coordinator.getStatus(), webSocket: address };
+      await coordinator.start(config);
+      return coordinator.snapshot();
     },
   );
 
-  ipcMain.handle(IpcChannel.StopMining, (): MiningStatus => {
-    coordinator.stop();
-    return coordinator.getStatus();
+  ipcMain.handle(IpcChannel.StopMining, async (): Promise<MiningStateUpdate> => {
+    await coordinator.stop();
+    return coordinator.snapshot();
+  });
+
+  ipcMain.handle(IpcChannel.ResetStats, (): MiningStateUpdate => {
+    coordinator.resetStats();
+    return coordinator.snapshot();
   });
 
   ipcMain.handle(IpcChannel.GetMiningStatus, (): MiningStatus => {
     return miningStatusSchema.parse(coordinator.getStatus());
-  });
-
-  ipcMain.on(IpcChannel.ReportStats, (_event, raw: unknown): void => {
-    // Fire-and-forget event — never throw out of the handler.
-    const parsed = miningStateUpdateSchema.safeParse(raw);
-    if (!parsed.success) {
-      console.warn('[ipc] ignoring malformed ReportStats payload:', parsed.error.message);
-      return;
-    }
-    coordinator.onRendererUpdate(parsed.data);
   });
 
   ipcMain.handle(IpcChannel.OpenExternal, async (_event, raw: unknown): Promise<void> => {
@@ -138,10 +140,4 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle(IpcChannel.AppVersion, (): string => appVersion);
-
-  ipcMain.handle(IpcChannel.ProxyAddress, async (): Promise<string> => {
-    // Boot the proxy lazily on first request; subsequent calls reuse it.
-    // 最初の呼び出しで起動し、以降は同じインスタンスを返す。
-    return proxy.start();
-  });
 }

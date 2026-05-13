@@ -53,6 +53,11 @@ function migrateRawState(raw: unknown): unknown {
       cfg['pool'] = host ? `${host}:${DEFAULT_STRATUM_PORT}` : undefined;
     }
   }
+  // The `webSocket` field was used by the previous web-miner architecture to
+  // override the bundled proxy URL. xmrig speaks Stratum directly, so the
+  // field is gone from the schema — strip it to avoid leaking unknown keys.
+  // 旧構成の webSocket 上書きフィールドは xmrig 直結により不要。古い保存値は黙って除去する。
+  if ('webSocket' in cfg) delete cfg['webSocket'];
   next['config'] = cfg;
   return next;
 }

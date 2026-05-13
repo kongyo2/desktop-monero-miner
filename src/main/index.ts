@@ -1,12 +1,13 @@
 import { BrowserWindow, app, ipcMain } from 'electron';
+import { join } from 'node:path';
 
 import { ConfigStore } from './config-store.ts';
 import { MiningCoordinator, registerIpcHandlers } from './ipc-handlers.ts';
-import { StratumProxy } from './stratum-proxy.ts';
 import { createMainWindow } from './window.ts';
+import { XmrigRunner } from './xmrig-runner.ts';
 
 let mainWindow: BrowserWindow | null = null;
-let proxy: StratumProxy | null = null;
+let runner: XmrigRunner | null = null;
 
 // The Content-Security-Policy is declared in src/renderer/index.html via a
 // <meta http-equiv="Content-Security-Policy"> tag. Electron's
@@ -18,9 +19,15 @@ let proxy: StratumProxy | null = null;
 
 function bootstrap(): void {
   const store = new ConfigStore();
-  proxy = new StratumProxy();
-  const coordinator = new MiningCoordinator(() => mainWindow, proxy);
-  registerIpcHandlers(ipcMain, store, coordinator, app.getVersion(), proxy);
+  const cacheDir = join(app.getPath('userData'), 'xmrig');
+  runner = new XmrigRunner({
+    cacheDir,
+    onInstallProgress: (phase, detail) => {
+      console.log(`[xmrig-install] ${phase}: ${detail}`);
+    },
+  });
+  const coordinator = new MiningCoordinator(() => mainWindow, runner);
+  registerIpcHandlers(ipcMain, store, coordinator, app.getVersion());
 
   mainWindow = createMainWindow();
   mainWindow.on('closed', () => {
@@ -43,19 +50,18 @@ app.on('window-all-closed', () => {
 });
 
 app.on('will-quit', (event) => {
-  if (!proxy) return;
-  const current = proxy;
-  proxy = null;
-  // Hold the quit until the proxy releases its TCP listeners; otherwise the
-  // OS may keep the loopback port wedged after the app exits, blocking the
-  // next launch on the same port.
-  // ループバックのリスナー解放を待ってから終了。残ったままだと次回起動時に
-  // ポートが掴まれて起動に失敗することがある。
+  if (!runner) return;
+  const current = runner;
+  runner = null;
+  // Hold the quit until xmrig terminates; without this Electron exits while
+  // the child still owns CPU threads, leaving an orphaned miner process the
+  // user has to find and kill manually.
+  // xmrig の終了を待ってからアプリを落とす。さもないと採掘プロセスが孤児になる。
   event.preventDefault();
   void current
     .stop()
     .catch((err) => {
-      console.warn('[main] stratum proxy stop failed:', err);
+      console.warn('[main] xmrig runner stop failed:', err);
     })
     .finally(() => {
       app.exit(0);

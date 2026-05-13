@@ -2,7 +2,7 @@ import type { Messages } from './types.ts';
 
 export const en: Messages = {
   appTitle: 'Desktop Monero Miner',
-  tagline: 'A desktop app for mining Monero (XMR) on your own machine.',
+  tagline: 'A desktop Monero (XMR) miner powered by an embedded xmrig.',
   language: 'Language',
   languageJa: '日本語',
   languageEn: 'English',
@@ -14,10 +14,7 @@ export const en: Messages = {
   fieldWorkerId: 'Worker ID',
   fieldPool: 'Stratum endpoint',
   fieldPoolHelp:
-    'Format: host:port or host:port:tls (e.g. gulf.moneroocean.stream:10128). The bundled proxy connects over TCP/TLS.',
-  fieldWebSocket: 'WebSocket override (optional)',
-  fieldWebSocketHelp:
-    'Leave empty to use the bundled local proxy (ws://127.0.0.1:…). External relays must use wss:// — plain ws:// to non-loopback hosts is blocked by CSP.',
+    'Format: host:port or host:port:tls (e.g. gulf.moneroocean.stream:10128). The embedded xmrig connects directly.',
   advancedSummary: 'Advanced',
   fieldThreads: 'Threads',
   fieldThrottle: 'Throttle (%)',
@@ -51,11 +48,10 @@ export const en: Messages = {
   errorThrottleRange: 'Throttle must be between 0 and 99.',
   errorPoolEmpty: 'Mining pool cannot be empty.',
   errorPoolEndpointInvalid: 'Pool must be in host:port or host:port:tls format.',
-  errorWebsocketInvalid: 'Leave empty or enter a valid ws:// / wss:// URL.',
   warningMining:
     'Note: Running the miner significantly increases CPU usage. Watch your electricity bill and heat.',
   attributionTitle: 'Acknowledgements',
   attributionDescription:
-    'This app is inspired by PYU224’s peertube-plugin-monero-miner and NajmAjmal’s monero-webminer.',
+    'This app uses xmrig (https://github.com/xmrig/xmrig) as its mining engine. The binary is downloaded automatically on first launch.',
   versionLabel: 'Version',
 };

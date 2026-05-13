@@ -28,12 +28,10 @@ export type Locale = z.infer<typeof localeSchema>;
 export const DEFAULT_STRATUM_PORT = 10128;
 
 /**
- * Stratum endpoint accepted by the bundled local proxy. Format is
- * "host:port" or "host:port:tls". The proxy opens a raw TCP socket (or TLS
- * when the third token is "tls"/"ssl") to this host and translates between
- * the upstream miner-script WebSocket protocol and Cryptonote Stratum.
- * ローカルプロキシが解釈する Stratum エンドポイント。"host:port" もしくは
- * "host:port:tls" 形式で指定する。
+ * Stratum endpoint accepted by xmrig. Format is "host:port" or "host:port:tls".
+ * The bundled runner passes this directly to xmrig via `-o host:port`, adding
+ * `--tls` when the third token is "tls"/"ssl".
+ * xmrig に渡す Stratum エンドポイント。"host:port" または "host:port:tls" を受理する。
  */
 const stratumEndpointSchema = z
   .string()
@@ -53,42 +51,14 @@ const stratumEndpointSchema = z
     { message: 'pool_endpoint_invalid' },
   );
 
-const optionalWsUrlSchema = z
-  .string()
-  .trim()
-  .default('')
-  .refine(
-    (value) => {
-      // Empty means "use the bundled local proxy"; the main process will
-      // inject its own ws://127.0.0.1:<port> URL at start time. Explicit
-      // overrides must use wss:// — the CSP connect-src directive only
-      // allows wss: and the loopback ws://127.0.0.1:*, so a non-loopback
-      // ws:// URL would validate but be blocked at runtime by the browser.
-      // 空欄はローカルプロキシ。明示上書きは wss:// 必須。CSP は wss: と
-      // ループバックのみ許可しており、外部 ws:// は実行時に CSP で弾かれる。
-      if (value === '') return true;
-      try {
-        const url = new URL(value);
-        if (url.protocol !== 'wss:') return false;
-        return url.hash === '';
-      } catch {
-        return false;
-      }
-    },
-    { message: 'websocket_url_invalid' },
-  );
-
 export const minerConfigSchema = z.object({
   walletAddress: moneroAddressSchema,
   workerId: z.string().trim().min(1).max(64).default('Desktop-Miner'),
-  // Default pool: gulf.moneroocean.stream over plain TCP on the auto-diff
-  // port. The upstream worker only supports CryptoNight family algorithms; if
-  // the chosen pool serves RandomX jobs the proxy surfaces an unsupported_algo
-  // error so the user sees a clear signal instead of a silent stall.
-  // 既定プール: moneroocean.stream の auto-diff ポート。CN 系のみ対応で、
-  // RandomX ジョブが届いた場合はプロキシ側で明示的に拒否を返す。
+  // Default pool: gulf.moneroocean.stream over plain TCP on the auto-diff port.
+  // xmrig handles the RandomX algorithm natively; the proxy translation layer
+  // that the previous web-miner approach required is no longer needed.
+  // 既定プール: moneroocean.stream の auto-diff ポート。xmrig が RandomX を直接処理する。
   pool: stratumEndpointSchema.default(`gulf.moneroocean.stream:${DEFAULT_STRATUM_PORT}`),
-  webSocket: optionalWsUrlSchema,
   threads: z.number().int().min(1).max(256).default(2),
   throttle: z.number().int().min(0).max(99).default(20),
   password: z.string().default(''),

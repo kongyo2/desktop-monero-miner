@@ -2,7 +2,7 @@ import type { Messages } from './types.ts';
 
 export const ja: Messages = {
   appTitle: 'Desktop Monero Miner',
-  tagline: 'Monero (XMR) を自宅マシンで採掘するためのデスクトップアプリ',
+  tagline: 'xmrig を内蔵した Monero (XMR) 採掘デスクトップアプリ',
   language: '言語',
   languageJa: '日本語',
   languageEn: 'English',
@@ -14,10 +14,7 @@ export const ja: Messages = {
   fieldWorkerId: 'ワーカー ID',
   fieldPool: 'Stratum エンドポイント',
   fieldPoolHelp:
-    '形式: host:port または host:port:tls（例: gulf.moneroocean.stream:10128）。同梱プロキシが TCP/TLS で接続します。',
-  fieldWebSocket: 'WebSocket 上書き（任意）',
-  fieldWebSocketHelp:
-    '空欄なら同梱ローカルプロキシ（ws://127.0.0.1:…）を使用します。外部リレーを使うときは wss:// で始まる URL を指定してください（CSP により平文 ws:// 外部接続は禁止）。',
+    '形式: host:port または host:port:tls（例: gulf.moneroocean.stream:10128）。内蔵 xmrig が直接接続します。',
   advancedSummary: '詳細設定',
   fieldThreads: 'スレッド数',
   fieldThrottle: 'スロットル (%)',
@@ -52,11 +49,10 @@ export const ja: Messages = {
   errorPoolEmpty: 'マイニングプールを入力してください。',
   errorPoolEndpointInvalid:
     'Stratum エンドポイントは host:port または host:port:tls 形式で指定してください。',
-  errorWebsocketInvalid: '空欄、または ws:// / wss:// で始まる有効な URL を入力してください。',
   warningMining:
-    '※ 採掘スクリプトを実行すると CPU 使用率が大幅に上昇します。電気代と発熱に十分注意してください。',
+    '※ 採掘を実行すると CPU 使用率が大幅に上昇します。電気代と発熱に十分注意してください。',
   attributionTitle: '参照プロジェクト',
   attributionDescription:
-    'このアプリは PYU224 氏の peertube-plugin-monero-miner と NajmAjmal 氏の monero-webminer を参考に作成しました。',
+    'このアプリは xmrig (https://github.com/xmrig/xmrig) を採掘エンジンとして利用しています。初回起動時にバイナリを自動でダウンロードします。',
   versionLabel: 'バージョン',
 };
