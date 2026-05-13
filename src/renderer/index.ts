@@ -282,9 +282,15 @@ class App {
 
     const startBtn = requireElement<HTMLButtonElement>('btn-start');
     const stopBtn = requireElement<HTMLButtonElement>('btn-stop');
-    const running = status === 'running' || status === 'starting';
-    startBtn.disabled = running;
-    stopBtn.disabled = !running;
+    const active = status === 'running' || status === 'starting';
+    // Disable Start during 'stopping' too — the main runner rejects start()
+    // calls while a stop is unwinding, so leaving the button enabled would
+    // silently drop the user's click and make restart feel flaky. Stop is
+    // disabled during 'stopping' because pressing it again has no effect.
+    // stopping 中の Start クリックは main 側で拒否されるためボタンを disable に。
+    const transitioning = status === 'stopping';
+    startBtn.disabled = active || transitioning;
+    stopBtn.disabled = !active;
 
     const stats = this.stats;
     requireElement<HTMLElement>('stat-hashrate').textContent = formatHashrate(

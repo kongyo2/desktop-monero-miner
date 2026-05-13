@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream, existsSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readdir, rename, rm, stat } from 'node:fs/promises';
+import { constants as fsConstants, createReadStream, createWriteStream, existsSync } from 'node:fs';
+import { access, chmod, mkdir, mkdtemp, readdir, rename, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -88,13 +88,18 @@ export type InstallProgress = (phase: 'download' | 'verify' | 'extract', detail:
  * verified against a pinned SHA-256 before extraction; a mismatch deletes the
  * file and aborts the install rather than running attacker-controlled bytes.
  * The cached layout is `xmrig-<ver>/xmrig[.exe]`, so subsequent launches
- * short-circuit to the cached binary without touching the network.
- * 展開済みなら即返し、無ければ取得→SHA-256 検証→展開。検証失敗ならファイル破棄。
+ * short-circuit to the cached binary without touching the network. Pass an
+ * AbortSignal to allow the caller (e.g. XmrigRunner on Stop) to cancel a
+ * long-running install before it finishes; the rejection propagates out as
+ * the signal's abort reason so the start() promise can settle cleanly.
+ * 展開済みなら即返し、無ければ取得→SHA-256 検証→展開。caller 側の Stop で abort 可能。
  */
 export async function ensureXmrigBinary(
   cacheDir: string,
   progress: InstallProgress = () => undefined,
+  signal?: AbortSignal,
 ): Promise<string> {
+  signal?.throwIfAborted();
   const target = resolveTarget();
   const binaryPath = join(cacheDir, target.binary);
   if (existsSync(binaryPath)) {
@@ -102,12 +107,15 @@ export async function ensureXmrigBinary(
   }
 
   await mkdir(cacheDir, { recursive: true });
+  signal?.throwIfAborted();
   const tmp = await mkdtemp(join(tmpdir(), 'xmrig-dl-'));
   try {
+    signal?.throwIfAborted();
     const archivePath = join(tmp, target.asset);
     const url = `https://github.com/xmrig/xmrig/releases/download/v${XMRIG_VERSION}/${target.asset}`;
     progress('download', url);
-    await downloadFile(url, archivePath);
+    await downloadFile(url, archivePath, signal);
+    signal?.throwIfAborted();
     progress('verify', target.sha256);
     const actual = await sha256OfFile(archivePath);
     if (actual !== target.sha256) {
@@ -115,6 +123,7 @@ export async function ensureXmrigBinary(
         `xmrig archive checksum mismatch for ${target.asset}: expected ${target.sha256}, got ${actual}`,
       );
     }
+    signal?.throwIfAborted();
     progress('extract', archivePath);
     await extractArchive(archivePath, cacheDir);
   } finally {
@@ -153,7 +162,20 @@ export async function findXmrigOnPath(): Promise<string | null> {
       const candidate = join(dir, `xmrig${ext}`);
       try {
         const st = await stat(candidate);
-        if (st.isFile()) return candidate;
+        if (!st.isFile()) continue;
+        // Require execute permission on Unix-like platforms so a stale or
+        // non-executable PATH entry doesn't shadow the auto-download
+        // fallback. On Windows, .exe is implicitly executable and access()
+        // with X_OK is not meaningful, so we skip the check there.
+        // Unix では実行権限を必須に。X 権限の無い stale ファイルで詰まらないようにする。
+        if (process.platform !== 'win32') {
+          try {
+            await access(candidate, fsConstants.X_OK);
+          } catch {
+            continue;
+          }
+        }
+        return candidate;
       } catch {
         /* not present, try next */
       }
@@ -191,18 +213,18 @@ async function sha256OfFile(path: string): Promise<string> {
  * the redirect chain to defend against loops.
  * URL からファイルを保存。GitHub のリリース URL は必ずリダイレクトするので追従する。
  */
-async function downloadFile(url: string, dest: string): Promise<void> {
+async function downloadFile(url: string, dest: string, signal?: AbortSignal): Promise<void> {
   let current = url;
   for (let i = 0; i < 5; i += 1) {
-    // Per-hop AbortSignal.timeout — applies to both the response-headers
-    // phase and the streamed body, since fetch's signal also aborts the
-    // associated body stream. A stalled connection therefore rejects rather
-    // than hanging indefinitely, surfacing as an install error the UI can
-    // toast and the user can retry.
-    // 各ホップで個別タイムアウト。fetch の signal は body にも伝播するので、
-    // 接続が固まればここで reject されて UI に届く。
-    const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
-    const res = await fetch(current, { redirect: 'manual', signal });
+    signal?.throwIfAborted();
+    // Combine the caller's cancellation signal with a per-hop timeout so
+    // the fetch aborts on whichever fires first. fetch's signal propagates
+    // to the body stream too, so a stall during streamed download also
+    // rejects rather than hanging indefinitely.
+    // caller のキャンセル signal とホップ毎タイムアウトを合成。body にも伝播するので
+    // ダウンロード中の停止も拾える。
+    const combined = combineSignals(signal, AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS));
+    const res = await fetch(current, { redirect: 'manual', signal: combined });
     if (res.status >= 300 && res.status < 400) {
       const next = res.headers.get('location');
       if (!next) throw new XmrigInstallError(`redirect without location: ${current}`);
@@ -218,6 +240,24 @@ async function downloadFile(url: string, dest: string): Promise<void> {
     return;
   }
   throw new XmrigInstallError(`too many redirects fetching ${url}`);
+}
+
+/**
+ * Compose two abort signals into one that aborts on whichever fires first.
+ * Equivalent to `AbortSignal.any([a, b])` from Node 20.3+, but written
+ * explicitly so the package's `>=20.0.0` engines constraint stays honest.
+ * 二つの signal を合成。AbortSignal.any 相当だが、Node 20 系下位互換のため自前実装。
+ */
+function combineSignals(a: AbortSignal | undefined, b: AbortSignal): AbortSignal {
+  if (!a) return b;
+  if (a.aborted) return a;
+  if (b.aborted) return b;
+  const controller = new AbortController();
+  const onAbortA = (): void => controller.abort(a.reason);
+  const onAbortB = (): void => controller.abort(b.reason);
+  a.addEventListener('abort', onAbortA, { once: true });
+  b.addEventListener('abort', onAbortB, { once: true });
+  return controller.signal;
 }
 
 /**

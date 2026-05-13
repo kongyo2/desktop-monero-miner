@@ -100,6 +100,18 @@ export class XmrigRunner {
    * 進行中の stop を共有する。多重 stop 呼び出しでも child の実際の終了まで待つ。
    */
   private stopPromise: Promise<void> | null = null;
+  /**
+   * In-flight start promise plus the AbortController that fans cancellation
+   * down into the installer's network/IO work. Without these, a stop() during
+   * the install would leave the install path running headlessly; a follow-up
+   * start() could then begin a second concurrent install that races on the
+   * shared cache directory's extract/rename step and corrupt the xmrig cache.
+   * stop() now aborts the in-flight install and awaits the start promise so
+   * the next start() begins from a settled state.
+   * 進行中 start を tracking。stop() で install を abort し、完全な巻き戻りまで待つ。
+   */
+  private startPromise: Promise<void> | null = null;
+  private installAbort: AbortController | null = null;
   private readonly options: XmrigOptions;
 
   public constructor(options: XmrigOptions) {
@@ -121,19 +133,34 @@ export class XmrigRunner {
     return { ...this.latestStats };
   }
 
-  public async start(config: MinerConfig): Promise<void> {
+  public start(config: MinerConfig): Promise<void> {
+    // Concurrent or in-flight start: share the existing promise so two UI
+    // clicks (or auto-start + manual start) end up at one mining session.
+    // 多重 start は同じ promise を共有して 1 セッションに収束させる。
+    if (this.startPromise) return this.startPromise;
     // Only accept Start from a settled state. Allowing it during 'stopping'
     // is a self-terminating race: while the old child is still being torn
     // down, start() would spawn a new child and assign this.process; the
     // stop's final shutdownInternal then captures that fresh process and
     // kills it. Idle and error are both safe — error has no live child.
     // stopping 中の start を許すと in-flight stop が新 child を巻き添えに殺す。
-    if (this.status !== 'idle' && this.status !== 'error') return;
+    if (this.status !== 'idle' && this.status !== 'error') return Promise.resolve();
+
+    const installAbort = new AbortController();
+    this.installAbort = installAbort;
+    this.startPromise = this.runStart(config, installAbort.signal).finally(() => {
+      if (this.installAbort === installAbort) this.installAbort = null;
+      this.startPromise = null;
+    });
+    return this.startPromise;
+  }
+
+  private async runStart(config: MinerConfig, installSignal: AbortSignal): Promise<void> {
     const generation = ++this.generation;
     this.transition('starting');
 
     try {
-      const binary = await this.resolveBinary();
+      const binary = await this.resolveBinary(installSignal);
       if (generation !== this.generation) return;
 
       // Re-check generation after every async hop. Without these the second
@@ -202,9 +229,13 @@ export class XmrigRunner {
       this.beginPolling();
     } catch (cause) {
       if (generation !== this.generation) return;
+      // Aborted installs surface as DOMException("AbortError"); silence them
+      // because the only way to reach this branch with a matching generation
+      // is the install's own internal timeout, and emitting a generic error
+      // for that case is fine — the message field carries the detail.
+      // generation 一致時の AbortError は内部 timeout に相当。message はそのまま。
       const message = cause instanceof Error ? cause.message : String(cause);
       this.shutdownInternal('error', message);
-      throw cause;
     }
   }
 
@@ -217,6 +248,16 @@ export class XmrigRunner {
     if (this.stopPromise) return this.stopPromise;
     if (this.status === 'idle') return Promise.resolve();
     this.generation += 1;
+    // Abort any in-flight install up front so its fetch/pipeline rejects
+    // fast. runStop will then await the start promise and we are guaranteed
+    // no installer is still running when stop() resolves — a follow-up
+    // start() therefore begins from a fully settled state with no
+    // concurrent extract/rename race on the shared cache directory.
+    // install を先に abort してから start の終了を待つ。これで次の start が
+    // 同時 install しないことを保証する。
+    if (this.installAbort) {
+      this.installAbort.abort(new Error('xmrig install cancelled by stop'));
+    }
     this.transition('stopping');
     this.endPolling();
     this.stopPromise = this.runStop();
@@ -225,6 +266,10 @@ export class XmrigRunner {
 
   private async runStop(): Promise<void> {
     try {
+      const inflightStart = this.startPromise;
+      if (inflightStart) {
+        await inflightStart.catch(() => undefined);
+      }
       const proc = this.process;
       if (proc && proc.exitCode === null) {
         proc.kill('SIGTERM');
@@ -255,12 +300,12 @@ export class XmrigRunner {
     this.emit({ status: this.status, stats: this.getStats() });
   }
 
-  private async resolveBinary(): Promise<string> {
+  private async resolveBinary(signal: AbortSignal): Promise<string> {
     const envBin = process.env['XMRIG_BIN'];
     if (envBin) return envBin;
     const onPath = await findXmrigOnPath();
     if (onPath) return onPath;
-    return ensureXmrigBinary(this.options.cacheDir, this.options.onInstallProgress);
+    return ensureXmrigBinary(this.options.cacheDir, this.options.onInstallProgress, signal);
   }
 
   private beginPolling(): void {
