@@ -113,15 +113,33 @@ export class XmrigRunner {
       const binary = await this.resolveBinary();
       if (generation !== this.generation) return;
 
+      // Re-check generation after every async hop. Without these the second
+      // and third awaits act as a "spawn window" that a fast Start→Stop or
+      // quit-during-startup can race through, ending up with xmrig launched
+      // after the user has already cancelled.
+      // 各 await ごとに generation を再チェック。これが無いと「キャンセル後に
+      // spawn してしまう」中途半端な状態が起きる。
       const apiPort = await pickFreePort();
+      if (generation !== this.generation) return;
       const apiToken = randomBytes(16).toString('hex');
+      const logDir = await mkdtemp(join(tmpdir(), 'xmrig-log-'));
+      if (generation !== this.generation) {
+        await rm(logDir, { recursive: true, force: true }).catch(() => undefined);
+        return;
+      }
       this.apiPort = apiPort;
       this.apiToken = apiToken;
-      const logDir = await mkdtemp(join(tmpdir(), 'xmrig-log-'));
       const logFile = join(logDir, 'xmrig.log');
       this.logDirPath = logDir;
       this.logFilePath = logFile;
       const args = buildXmrigArgs(config, apiPort, apiToken, logFile);
+
+      // Final cancellation check immediately before the synchronous spawn —
+      // anything that happens after this is owned by the child-process exit
+      // handler, so a late stop() races through `proc.kill` rather than the
+      // "skip spawn entirely" path above.
+      // spawn 直前の最終チェック。これより後は exit ハンドラ側で kill して回収する。
+      if (generation !== this.generation) return;
 
       const child = spawn(binary, args, {
         stdio: ['ignore', 'ignore', 'ignore'],
@@ -400,21 +418,22 @@ export function buildXmrigArgs(
 ): string[] {
   const pool = parseStratumPool(config.pool);
   if (!pool) throw new Error(`invalid pool endpoint: ${config.pool}`);
-  const login = config.workerId
-    ? `${config.walletAddress}.${config.workerId}`
-    : config.walletAddress;
-  // Translate the UI throttle (0 = full power, 99 = 1%) into a concrete reduced
-  // thread count. xmrig's `--cpu-max-threads-hint` is only consulted during
-  // autoconfig, so it has no effect when `-t` already pins thread count; the
-  // only reliable knob for actual CPU usage reduction is reducing threads.
-  // throttle (0..99) を実効スレッド数の削減に変換。xmrig の hint は -t 併用時に
-  // 効かないので、スレッド数を直接削るのが唯一確実な手段。
+  // Translate the UI throttle (0 = full power, 99 = 1%) into a concrete
+  // reduced thread count plus an OS scheduling priority. Thread reduction
+  // alone cannot honour the UI contract at small thread counts (threads=1
+  // with throttle=99 has nothing to reduce), so we also lower the CPU
+  // priority — at idle priority the OS only runs xmrig when nothing else
+  // wants the core, which gives the user the strong-throttle behaviour the
+  // slider implies even on single-thread configs.
+  // throttle はスレッド数削減 + cpu-priority 低下の合わせ技で実現する。
+  // 単一スレッド構成では数を減らせないので、scheduling priority で補う。
   const effectiveThreads = computeEffectiveThreads(config.threads, config.throttle);
+  const cpuPriority = computeCpuPriority(config.throttle);
   const args: string[] = [
     '-o',
     `${pool.host}:${pool.port}`,
     '-u',
-    login,
+    config.walletAddress,
     '-p',
     config.password || 'x',
     '--coin',
@@ -430,8 +449,16 @@ export function buildXmrigArgs(
     '-t',
     String(effectiveThreads),
   ];
+  // Send worker name via the dedicated rig-id field rather than mutating the
+  // username with `wallet.worker`. Some pools require the username to be the
+  // raw wallet string and reject the dotted form; the rig-id field is the
+  // xmrig-idiomatic, broadly-compatible path.
+  // worker 名は `--rig-id` で別フィールド送信。`wallet.worker` を強制すると
+  // 一部プールで認証拒否される。
+  if (config.workerId) args.push('--rig-id', config.workerId);
   if (logFile) args.push('-l', logFile);
   if (pool.tls) args.push('--tls');
+  if (cpuPriority !== null) args.push('--cpu-priority', String(cpuPriority));
   return args;
 }
 
@@ -441,7 +468,22 @@ export function computeEffectiveThreads(threads: number, throttle: number): numb
   const remaining = Math.max(0, 100 - throttle) / 100;
   // Round to nearest so throttle=50 on 4 threads gives 2, but always keep at
   // least one thread running — a configured "Start" should never silently
-  // produce a no-op miner.
-  // 最低 1 スレッドは保証。0 にすると採掘がそもそも始まらない無駄な起動になる。
+  // produce a no-op miner. The cpu-priority drop (see computeCpuPriority)
+  // covers the cases where rounding can't reduce further.
+  // 最低 1 スレッドは保証。さらに削れない領域は priority 下げで補う。
   return Math.max(1, Math.round(threads * remaining));
+}
+
+/**
+ * Map throttle (0–99) onto xmrig's `--cpu-priority` (0=idle … 5=realtime).
+ * High throttle settings get OS idle priority so the miner only runs when
+ * nothing else wants the CPU; moderate throttle gets below-normal; no
+ * throttle returns null so we leave xmrig's default (normal) alone.
+ * throttle を CPU 優先度に対応付ける。高 throttle = idle で他に譲る、低 throttle = デフォルト。
+ */
+export function computeCpuPriority(throttle: number): number | null {
+  if (!Number.isFinite(throttle) || throttle <= 0) return null;
+  if (throttle >= 50) return 0; // idle
+  if (throttle >= 20) return 1; // below normal
+  return null;
 }

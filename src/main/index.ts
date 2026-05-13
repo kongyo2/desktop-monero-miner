@@ -46,6 +46,17 @@ void app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  // Stop xmrig the moment the UI disappears. On macOS the app stays alive in
+  // the dock when the last window closes, so without this the miner would
+  // keep burning CPU/power headlessly until the user explicitly quits —
+  // exactly the surprise behaviour a desktop GUI miner should avoid.
+  // macOS では window 全閉でも app は dock に残るので、ここで明示停止しないと
+  // GUI 非表示のまま採掘が続き、ユーザーが気付かず電力を消費する。
+  if (runner) {
+    void runner.stop().catch((err) => {
+      console.warn('[main] xmrig runner stop on window-all-closed failed:', err);
+    });
+  }
   if (process.platform !== 'darwin') app.quit();
 });
 
