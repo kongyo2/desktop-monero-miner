@@ -26,6 +26,7 @@ linux:
       arch: [x64]
   category: Utility
   synopsis: Desktop Monero miner built with Electron and TypeScript
+  maintainer: kongyo2 <kongyo2@users.noreply.github.com>
 
 mac:
   target:
