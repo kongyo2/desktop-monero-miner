@@ -19,6 +19,14 @@ import { ensureXmrigBinary, findXmrigOnPath } from './xmrig-installer.ts';
  */
 
 const POLL_INTERVAL_MS = 1_000;
+/**
+ * Hard cap on each /summary request so a wedged xmrig (socket accepted but
+ * never replies) cannot accumulate in-flight fetches every second. The poll
+ * fires at 1s intervals, so any cap below that bounds outstanding requests
+ * to at most one per tick — a brief 800ms is plenty for a loopback API.
+ * 1 リクエストあたりの上限。これが無いと毎秒の poll が滞留して累積する。
+ */
+const POLL_TIMEOUT_MS = 800;
 const STOP_TIMEOUT_MS = 5_000;
 
 export type XmrigStatus = 'idle' | 'starting' | 'running' | 'stopping' | 'error';
@@ -83,6 +91,15 @@ export class XmrigRunner {
    */
   private logFilePath: string | null = null;
   private logDirPath: string | null = null;
+  /**
+   * In-flight stop work. Concurrent callers (e.g. macOS window-all-closed
+   * followed by will-quit, or UI Stop pressed during app quit) reuse this
+   * promise so they all settle on the same completion — the previous early-
+   * return-on-'stopping' branch would otherwise reset state synchronously
+   * and let app.exit() fire before the child had actually terminated.
+   * 進行中の stop を共有する。多重 stop 呼び出しでも child の実際の終了まで待つ。
+   */
+  private stopPromise: Promise<void> | null = null;
   private readonly options: XmrigOptions;
 
   public constructor(options: XmrigOptions) {
@@ -105,7 +122,13 @@ export class XmrigRunner {
   }
 
   public async start(config: MinerConfig): Promise<void> {
-    if (this.status === 'running' || this.status === 'starting') return;
+    // Only accept Start from a settled state. Allowing it during 'stopping'
+    // is a self-terminating race: while the old child is still being torn
+    // down, start() would spawn a new child and assign this.process; the
+    // stop's final shutdownInternal then captures that fresh process and
+    // kills it. Idle and error are both safe — error has no live child.
+    // stopping 中の start を許すと in-flight stop が新 child を巻き添えに殺す。
+    if (this.status !== 'idle' && this.status !== 'error') return;
     const generation = ++this.generation;
     this.transition('starting');
 
@@ -158,6 +181,12 @@ export class XmrigRunner {
           return;
         }
         void this.readLogTail().then((tail) => {
+          // Re-check the token after the async file read — a user stop()
+          // issued while we were tailing the log would otherwise be
+          // overwritten by this stale 'error' transition, flipping the UI
+          // back from idle to error against the user's intent.
+          // log 読み出し中に stop された場合に idle → error へ巻き戻さない。
+          if (this.generation !== generation) return;
           const reason = signal
             ? `xmrig terminated by signal ${signal}`
             : `xmrig exited with code ${code ?? 'unknown'}`;
@@ -179,26 +208,36 @@ export class XmrigRunner {
     }
   }
 
-  public async stop(): Promise<void> {
+  public stop(): Promise<void> {
+    // Concurrent callers share the in-flight stop so they all wait for the
+    // same child exit. Without this the second caller's early-return would
+    // synchronously reset status to idle and let app.exit() race past the
+    // still-alive child, orphaning xmrig after the app process dies.
+    // 同時 stop は同じ promise を返し、child の本当の終了まで全員待つ。
+    if (this.stopPromise) return this.stopPromise;
+    if (this.status === 'idle') return Promise.resolve();
     this.generation += 1;
-    if (this.status === 'idle' || this.status === 'stopping') {
-      this.shutdownInternal('idle');
-      return;
-    }
     this.transition('stopping');
     this.endPolling();
-    const proc = this.process;
-    if (!proc || proc.exitCode !== null) {
+    this.stopPromise = this.runStop();
+    return this.stopPromise;
+  }
+
+  private async runStop(): Promise<void> {
+    try {
+      const proc = this.process;
+      if (proc && proc.exitCode === null) {
+        proc.kill('SIGTERM');
+        const exited = await waitForExit(proc, STOP_TIMEOUT_MS);
+        if (!exited && proc.exitCode === null) {
+          proc.kill('SIGKILL');
+          await waitForExit(proc, STOP_TIMEOUT_MS);
+        }
+      }
+    } finally {
       this.shutdownInternal('idle');
-      return;
+      this.stopPromise = null;
     }
-    proc.kill('SIGTERM');
-    const exited = await waitForExit(proc, STOP_TIMEOUT_MS);
-    if (!exited && proc.exitCode === null) {
-      proc.kill('SIGKILL');
-      await waitForExit(proc, STOP_TIMEOUT_MS);
-    }
-    this.shutdownInternal('idle');
   }
 
   public resetStats(): void {
@@ -243,13 +282,15 @@ export class XmrigRunner {
     try {
       const res = await fetch(`http://127.0.0.1:${this.apiPort}/2/summary`, {
         headers: { Authorization: `Bearer ${this.apiToken}` },
+        signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
       });
       if (!res.ok) return;
       const data = (await res.json()) as XmrigSummary;
       this.updateStatsFromSummary(data);
     } catch {
-      // xmrig may still be initialising; skip this tick silently.
-      // 起動直後など HTTP サーバが立ち上がる前は無視して次の tick を待つ。
+      // xmrig may still be initialising or a single request may have timed
+      // out; skip this tick silently and let the next interval retry.
+      // 起動直後 / 一時的なタイムアウトは無視して次の tick を待つ。
     }
   }
 

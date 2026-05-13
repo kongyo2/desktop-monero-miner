@@ -46,18 +46,26 @@ void app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  // Stop xmrig the moment the UI disappears. On macOS the app stays alive in
-  // the dock when the last window closes, so without this the miner would
-  // keep burning CPU/power headlessly until the user explicitly quits —
-  // exactly the surprise behaviour a desktop GUI miner should avoid.
-  // macOS では window 全閉でも app は dock に残るので、ここで明示停止しないと
-  // GUI 非表示のまま採掘が続き、ユーザーが気付かず電力を消費する。
-  if (runner) {
-    void runner.stop().catch((err) => {
-      console.warn('[main] xmrig runner stop on window-all-closed failed:', err);
-    });
+  if (process.platform === 'darwin') {
+    // On macOS the app stays alive in the dock when the last window closes,
+    // so will-quit will not fire to clean things up. Stop xmrig ourselves
+    // here — without this the miner would keep burning CPU/power headlessly
+    // until the user explicitly quits, exactly the surprise behaviour a
+    // desktop GUI miner should avoid.
+    // macOS は window 全閉でも app は dock に残るためここで自前で stop。
+    if (runner) {
+      void runner.stop().catch((err) => {
+        console.warn('[main] xmrig runner stop on window-all-closed failed:', err);
+      });
+    }
+    return;
   }
-  if (process.platform !== 'darwin') app.quit();
+  // On Linux/Windows let app.quit() trigger will-quit and own the entire
+  // shutdown. Calling stop() here would race with the will-quit handler:
+  // the second stop() would no-op on the in-flight 'stopping' state and
+  // app.exit(0) could run before the child has actually exited.
+  // Linux/Windows では will-quit が完全に shutdown を所有するので、ここでは触らない。
+  app.quit();
 });
 
 app.on('will-quit', (event) => {

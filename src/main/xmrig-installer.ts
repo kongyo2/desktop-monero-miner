@@ -129,7 +129,12 @@ export async function findXmrigOnPath(): Promise<string | null> {
   const pathEnv = process.env['PATH'];
   if (!pathEnv) return null;
   const sep = process.platform === 'win32' ? ';' : ':';
-  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
+  // Only return extensions Node can spawn directly with shell: false. On
+  // Windows that is .exe (and .com, but xmrig never ships as one); .cmd and
+  // .bat require shell mediation, so accepting them here would make path
+  // discovery report success and then fail at spawn time.
+  // shell:false で直接 spawn 可能な拡張子のみ受理。.cmd/.bat は shell 必須なので除外。
+  const exts = process.platform === 'win32' ? ['.exe'] : [''];
   for (const dir of pathEnv.split(sep)) {
     if (!dir) continue;
     for (const ext of exts) {
