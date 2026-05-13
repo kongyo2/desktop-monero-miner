@@ -324,6 +324,14 @@ export class XmrigRunner {
 
   private async pollSummary(): Promise<void> {
     if (!this.apiPort || !this.apiToken) return;
+    // Capture the session token before the await. After the response comes
+    // back we gate the update on both the same token and a still-running
+    // status; without these, an in-flight summary fetch issued before
+    // stop() can land after shutdownInternal('idle') resets state and
+    // repopulate stale stats while the UI reads 'idle'.
+    // session token を await 前に保持し、応答適用時に同一 session かつ running
+    // であることを確認する。stop 後の遅延レスポンスで stale な値を書き戻さない。
+    const generation = this.generation;
     try {
       const res = await fetch(`http://127.0.0.1:${this.apiPort}/2/summary`, {
         headers: { Authorization: `Bearer ${this.apiToken}` },
@@ -331,6 +339,7 @@ export class XmrigRunner {
       });
       if (!res.ok) return;
       const data = (await res.json()) as XmrigSummary;
+      if (this.generation !== generation || this.status !== 'running') return;
       this.updateStatsFromSummary(data);
     } catch {
       // xmrig may still be initialising or a single request may have timed
