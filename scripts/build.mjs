@@ -18,7 +18,11 @@ const commonNode = {
   bundle: true,
   sourcemap: true,
   target: 'node20',
-  external: ['electron', 'electron-store'],
+  // Only Electron itself stays external (it is provided by the runtime).
+  // electron-store v10 (and its dep `conf`) is pure ESM, so it MUST be bundled
+  // into this CJS output — otherwise Node throws ERR_REQUIRE_ESM at runtime
+  // when the bundled require() tries to resolve the package.
+  external: ['electron'],
   logLevel: 'info',
 };
 
