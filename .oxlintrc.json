@@ -8,5 +8,5 @@
     "no-console": "off",
     "typescript/no-explicit-any": "error"
   },
-  "ignorePatterns": ["node_modules", "dist", "build", "coverage", "*.min.js"]
+  "ignorePatterns": ["node_modules", "dist", "build", "release", "coverage", "*.min.js"]
 }

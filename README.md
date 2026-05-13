@@ -49,6 +49,15 @@ npm start
 | `npm run format:check`         | フォーマット確認                                 |
 | `npm run check`                | 型検査 + 厳格 lint + フォーマット確認            |
 | `npm run check:file -- <path>` | 指定ファイルだけ lint                            |
+| `npm run package`              | 現在の OS 向けに electron-builder で配布物を作成 |
+| `npm run package:linux`        | Linux 向けパッケージのみ作成                     |
+| `npm run package:mac`          | macOS 向けパッケージのみ作成                     |
+| `npm run package:win`          | Windows 向けパッケージのみ作成                   |
+
+### CI とリリース
+
+- `.github/workflows/ci.yml` — `main` ブランチ・`claude/**` ブランチへの push、`main` への PR、`workflow_dispatch` で型検査・厳格 lint・フォーマット確認・ビルドを実行します。
+- `.github/workflows/release.yml` — **手動トリガー（`workflow_dispatch`）専用**のリリースワークフローです。GitHub Actions の画面から `tag`（例: `v0.1.0`）と `draft` / `prerelease` フラグを指定して起動すると、Ubuntu / macOS / Windows のランナーで `npm run package:<platform>` を並列実行し、生成物を集めて `softprops/action-gh-release` で GitHub Release を作成 / 更新します。既定では `draft: true` なので、公開前に内容を確認できます。
 
 ### ディレクトリ構成
 
@@ -138,6 +147,15 @@ npm start
 | `npm run format:check`         | Run Prettier in check mode                        |
 | `npm run check`                | typecheck + strict lint + format check            |
 | `npm run check:file -- <path>` | Lint a single file                                |
+| `npm run package`              | Package for the current OS with electron-builder  |
+| `npm run package:linux`        | Package for Linux only                            |
+| `npm run package:mac`          | Package for macOS only                            |
+| `npm run package:win`          | Package for Windows only                          |
+
+### CI & Releases
+
+- `.github/workflows/ci.yml` — runs typecheck, strict lint, format check and a full build on every push to `main` / `claude/**`, on PRs targeting `main`, and on manual `workflow_dispatch` triggers.
+- `.github/workflows/release.yml` — **manual `workflow_dispatch` release pipeline**. Trigger it from the GitHub Actions tab with a `tag` (e.g. `v0.1.0`) plus optional `draft` / `prerelease` flags. The workflow runs `npm run package:<platform>` in parallel on Ubuntu, macOS and Windows runners, collects the produced installers and bundles them into a GitHub Release via `softprops/action-gh-release`. By default it creates a draft release so you can review the artifacts before publishing.
 
 ### Project layout
 
