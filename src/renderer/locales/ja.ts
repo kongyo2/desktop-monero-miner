@@ -12,8 +12,13 @@ export const ja: Messages = {
   fieldWallet: 'Monero ウォレットアドレス',
   fieldWalletHelp: '4 または 8 から始まる Monero アドレス（95 / 106 文字）を入力してください。',
   fieldWorkerId: 'ワーカー ID',
-  fieldPool: 'マイニングプール',
-  fieldWebSocket: 'WebSocket プロキシ URL',
+  fieldPool: 'Stratum エンドポイント',
+  fieldPoolHelp:
+    '形式: host:port または host:port:tls（例: gulf.moneroocean.stream:10128）。同梱プロキシが TCP/TLS で接続します。',
+  fieldWebSocket: 'WebSocket 上書き（任意）',
+  fieldWebSocketHelp:
+    '空欄なら同梱ローカルプロキシ（ws://127.0.0.1:…）を使用します。外部リレーを使いたいときのみ wss:// URL を指定してください。',
+  advancedSummary: '詳細設定',
   fieldThreads: 'スレッド数',
   fieldThrottle: 'スロットル (%)',
   fieldThrottleHelp: '0 で全力、99 で 1% で稼働。',
@@ -45,7 +50,9 @@ export const ja: Messages = {
   errorThreadsRange: 'スレッド数は 1〜256 の整数で指定してください。',
   errorThrottleRange: 'スロットルは 0〜99 で指定してください。',
   errorPoolEmpty: 'マイニングプールを入力してください。',
-  errorWebsocketInvalid: '有効な WebSocket URL (wss://...) を入力してください。',
+  errorPoolEndpointInvalid:
+    'Stratum エンドポイントは host:port または host:port:tls 形式で指定してください。',
+  errorWebsocketInvalid: '空欄、または ws:// / wss:// で始まる有効な URL を入力してください。',
   warningMining:
     '※ 採掘スクリプトを実行すると CPU 使用率が大幅に上昇します。電気代と発熱に十分注意してください。',
   attributionTitle: '参照プロジェクト',

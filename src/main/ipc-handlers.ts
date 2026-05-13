@@ -18,19 +18,28 @@ import {
   setPreferencesPayloadSchema,
 } from '../shared/ipc.ts';
 import type { ConfigStore } from './config-store.ts';
+import type { StratumProxy } from './stratum-proxy.ts';
 
 export class MiningCoordinator {
   private status: MiningStatus = 'idle';
 
-  public constructor(private readonly getWindow: () => BrowserWindow | null) {}
+  public constructor(
+    private readonly getWindow: () => BrowserWindow | null,
+    private readonly proxy: StratumProxy,
+  ) {}
 
   public getStatus(): MiningStatus {
     return this.status;
   }
 
-  public start(_config: MinerConfig): void {
+  public async start(_config: MinerConfig): Promise<string> {
     this.status = 'starting';
     this.broadcast({ status: this.status });
+    // Ensure the bundled proxy is up before the renderer attempts to connect;
+    // every successful start hands the renderer a fresh, validated address.
+    // renderer が接続を試みる前に同梱プロキシを必ず起動し、有効な URL を返す。
+    const address = await this.proxy.start();
+    return address;
   }
 
   public stop(): void {
@@ -55,6 +64,7 @@ export function registerIpcHandlers(
   store: ConfigStore,
   coordinator: MiningCoordinator,
   appVersion: string,
+  proxy: StratumProxy,
 ): void {
   ipcMain.handle(IpcChannel.GetConfig, (): PersistedState['config'] => {
     return store.getConfig();
@@ -74,11 +84,14 @@ export function registerIpcHandlers(
     return store.updatePreferences(patch);
   });
 
-  ipcMain.handle(IpcChannel.StartMining, (_event, raw: unknown): MiningStatus => {
-    const config = minerConfigSchema.parse(raw);
-    coordinator.start(config);
-    return coordinator.getStatus();
-  });
+  ipcMain.handle(
+    IpcChannel.StartMining,
+    async (_event, raw: unknown): Promise<{ status: MiningStatus; webSocket: string }> => {
+      const config = minerConfigSchema.parse(raw);
+      const address = await coordinator.start(config);
+      return { status: coordinator.getStatus(), webSocket: address };
+    },
+  );
 
   ipcMain.handle(IpcChannel.StopMining, (): MiningStatus => {
     coordinator.stop();
@@ -109,4 +122,10 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle(IpcChannel.AppVersion, (): string => appVersion);
+
+  ipcMain.handle(IpcChannel.ProxyAddress, async (): Promise<string> => {
+    // Boot the proxy lazily on first request; subsequent calls reuse it.
+    // 最初の呼び出しで起動し、以降は同じインスタンスを返す。
+    return proxy.start();
+  });
 }

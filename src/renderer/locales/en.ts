@@ -12,8 +12,13 @@ export const en: Messages = {
   fieldWallet: 'Monero wallet address',
   fieldWalletHelp: 'Enter a Monero address starting with 4 or 8 (95 / 106 characters).',
   fieldWorkerId: 'Worker ID',
-  fieldPool: 'Mining pool',
-  fieldWebSocket: 'WebSocket proxy URL',
+  fieldPool: 'Stratum endpoint',
+  fieldPoolHelp:
+    'Format: host:port or host:port:tls (e.g. gulf.moneroocean.stream:10128). The bundled proxy connects over TCP/TLS.',
+  fieldWebSocket: 'WebSocket override (optional)',
+  fieldWebSocketHelp:
+    'Leave empty to use the bundled local proxy (ws://127.0.0.1:…). Provide a wss:// URL only to route through an external relay instead.',
+  advancedSummary: 'Advanced',
   fieldThreads: 'Threads',
   fieldThrottle: 'Throttle (%)',
   fieldThrottleHelp: '0 = full power, 99 = 1% utilization.',
@@ -45,7 +50,8 @@ export const en: Messages = {
   errorThreadsRange: 'Threads must be an integer between 1 and 256.',
   errorThrottleRange: 'Throttle must be between 0 and 99.',
   errorPoolEmpty: 'Mining pool cannot be empty.',
-  errorWebsocketInvalid: 'Enter a valid WebSocket URL (wss://...).',
+  errorPoolEndpointInvalid: 'Pool must be in host:port or host:port:tls format.',
+  errorWebsocketInvalid: 'Leave empty or enter a valid ws:// / wss:// URL.',
   warningMining:
     'Note: Running the miner significantly increases CPU usage. Watch your electricity bill and heat.',
   attributionTitle: 'Acknowledgements',

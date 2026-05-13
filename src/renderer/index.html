@@ -94,18 +94,21 @@
             />
             <small class="error" data-error-for="workerId"></small>
           </div>
-          <div class="form__row form__row--inline">
-            <div>
-              <label for="field-pool" id="label-pool">Pool</label>
-              <input id="field-pool" name="pool" type="text" autocomplete="off" />
-              <small class="error" data-error-for="pool"></small>
-            </div>
-            <div>
-              <label for="field-ws" id="label-ws">WebSocket</label>
-              <input id="field-ws" name="webSocket" type="url" autocomplete="off" />
+          <div class="form__row">
+            <label for="field-pool" id="label-pool">Pool</label>
+            <input id="field-pool" name="pool" type="text" autocomplete="off" />
+            <small id="help-pool" class="help"></small>
+            <small class="error" data-error-for="pool"></small>
+          </div>
+          <details class="form__advanced">
+            <summary id="advanced-summary">Advanced</summary>
+            <div class="form__row">
+              <label for="field-ws" id="label-ws">WebSocket override</label>
+              <input id="field-ws" name="webSocket" type="text" autocomplete="off" placeholder="" />
+              <small id="help-ws" class="help"></small>
               <small class="error" data-error-for="webSocket"></small>
             </div>
-          </div>
+          </details>
           <div class="form__row form__row--inline">
             <div>
               <label for="field-threads" id="label-threads">Threads</label>

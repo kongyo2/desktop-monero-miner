@@ -124,6 +124,26 @@ select:focus {
   cursor: pointer;
 }
 
+.form__advanced {
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: var(--bg-elevated-2);
+}
+
+.form__advanced > summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 0;
+}
+
+.form__advanced[open] > summary {
+  margin-bottom: 8px;
+}
+
 .help {
   color: var(--fg-muted);
   font-size: 12px;
