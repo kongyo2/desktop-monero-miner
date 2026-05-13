@@ -24,20 +24,36 @@ type FieldName =
   | 'throttle'
   | 'password';
 
-const defaults: MinerConfig = minerConfigSchema.parse({
-  walletAddress: '4'.padEnd(95, '1'),
+/**
+ * Form defaults used to pre-fill the UI on first launch. Wallet address is
+ * intentionally empty so the user is forced to supply their own — pre-filling
+ * a synthetic address would silently direct mining to an unusable destination.
+ * 初回起動時のフォーム既定値。walletAddress は意図的に空にし、必ずユーザー自身に
+ * 入力させます（疑似アドレスを入れると採掘先が不達となり電力を浪費するため）。
+ */
+type FormValues = Record<FieldName, string | number> & {
+  walletAddress: string;
+  workerId: string;
+  pool: string;
+  webSocket: string;
+  threads: number;
+  throttle: number;
+  password: string;
+};
+
+const FORM_DEFAULTS: FormValues = {
+  walletAddress: '',
   workerId: 'Desktop-Miner',
   pool: 'moneroocean.stream',
   webSocket: 'wss://ny1.xmrminingproxy.com',
   threads: 2,
   throttle: 20,
   password: '',
-});
+};
 
 class App {
   private readonly i18n: I18n;
   private readonly miner: WebMiner;
-  private currentConfig: MinerConfig = defaults;
   private autoStart = false;
   private toastTimer: number | null = null;
 
@@ -58,11 +74,18 @@ class App {
     this.i18n.setLocale(prefs.locale);
     this.autoStart = prefs.autoStart;
 
-    const merged = { ...defaults, ...persistedConfig };
+    const merged: FormValues = {
+      walletAddress: persistedConfig.walletAddress ?? FORM_DEFAULTS.walletAddress,
+      workerId: persistedConfig.workerId ?? FORM_DEFAULTS.workerId,
+      pool: persistedConfig.pool ?? FORM_DEFAULTS.pool,
+      webSocket: persistedConfig.webSocket ?? FORM_DEFAULTS.webSocket,
+      threads: persistedConfig.threads ?? FORM_DEFAULTS.threads,
+      throttle: persistedConfig.throttle ?? FORM_DEFAULTS.throttle,
+      password: persistedConfig.password ?? FORM_DEFAULTS.password,
+    };
     const parsed = minerConfigSchema.safeParse(merged);
-    this.currentConfig = parsed.success ? parsed.data : defaults;
 
-    this.fillForm(this.currentConfig);
+    this.fillForm(merged);
     this.renderVersion(version);
     this.bindLanguage();
     this.bindForm();
@@ -98,7 +121,6 @@ class App {
       event.preventDefault();
       const config = this.readForm();
       if (!config) return;
-      this.currentConfig = config;
       void window.miner.setConfig(config).then(() => {
         this.showToast(this.i18n.messages().toastSaved, 'success');
       });
@@ -109,7 +131,6 @@ class App {
     requireElement<HTMLButtonElement>('btn-start').addEventListener('click', () => {
       const config = this.readForm();
       if (!config) return;
-      this.currentConfig = config;
       void this.startMining(config);
     });
 
@@ -160,14 +181,14 @@ class App {
     return result.data;
   }
 
-  private fillForm(config: MinerConfig): void {
-    setInputValue('field-wallet', config.walletAddress);
-    setInputValue('field-worker', config.workerId);
-    setInputValue('field-pool', config.pool);
-    setInputValue('field-ws', config.webSocket);
-    setInputValue('field-threads', String(config.threads));
-    setInputValue('field-throttle', String(config.throttle));
-    setInputValue('field-password', config.password);
+  private fillForm(values: FormValues): void {
+    setInputValue('field-wallet', values.walletAddress);
+    setInputValue('field-worker', values.workerId);
+    setInputValue('field-pool', values.pool);
+    setInputValue('field-ws', values.webSocket);
+    setInputValue('field-threads', String(values.threads));
+    setInputValue('field-throttle', String(values.throttle));
+    setInputValue('field-password', values.password);
   }
 
   private fieldValue(id: string): string {

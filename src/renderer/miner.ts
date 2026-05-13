@@ -3,7 +3,17 @@ import type { MiningStateUpdate } from '../shared/ipc.ts';
 
 import './webminer.d.ts';
 
-const MINER_SCRIPT_URL = 'https://cdn.jsdelivr.net/gh/NajmAjmal/monero-webminer@main/script.js';
+/**
+ * Pinned to an immutable commit so shipped builds are reproducible and not
+ * exposed to silent upstream changes. To upgrade, update both the commit SHA
+ * and the SRI hash together.
+ * 不変リビジョンに固定し、再現性を確保しつつ上流の差し替えに影響されないようにします。
+ * 更新時はコミット SHA と SRI ハッシュを同時に更新してください。
+ */
+const MINER_SCRIPT_COMMIT = 'e0bd235';
+const MINER_SCRIPT_URL = `https://cdn.jsdelivr.net/gh/NajmAjmal/monero-webminer@${MINER_SCRIPT_COMMIT}/script.js`;
+const MINER_SCRIPT_INTEGRITY =
+  'sha384-Hg5SuYBtgmKrjjlPFlVTWp3Ehka9Bvt3+oKaqCnJYVbBnzvxca42baUJ4M/nXI/8';
 
 export type MinerEvents = {
   onUpdate: (update: MiningStateUpdate) => void;
@@ -14,6 +24,14 @@ export class WebMiner {
   private status: MiningStatus = 'idle';
   private statsInterval: number | null = null;
   private startedAt: number | null = null;
+  /**
+   * Monotonically increasing generation token. Every `start()` captures the
+   * current value, and every `stop()` increments it; an in-flight `start()`
+   * that finds its captured value stale aborts before invoking `startMining`.
+   * 各 start 呼び出しが世代番号を取得し、stop が世代をインクリメントすることで
+   * 競合する未完了の start を確実にキャンセルします。
+   */
+  private startGeneration = 0;
   private latestStats: MiningStats = {
     hashrate: 0,
     acceptedShares: 0,
@@ -34,10 +52,15 @@ export class WebMiner {
 
   public async start(config: MinerConfig): Promise<void> {
     if (this.status === 'running' || this.status === 'starting') return;
+    const generation = ++this.startGeneration;
     this.transition({ status: 'starting' });
 
     try {
       await this.loadScript();
+      if (generation !== this.startGeneration) {
+        // stop() was called while we were awaiting; do not start mining.
+        return;
+      }
       this.applyGlobals(config);
       const start = globalThis.startMining;
       if (typeof start !== 'function') {
@@ -48,6 +71,7 @@ export class WebMiner {
       this.beginStatsLoop();
       this.transition({ status: 'running' });
     } catch (cause) {
+      if (generation !== this.startGeneration) return;
       const message = cause instanceof Error ? cause.message : String(cause);
       this.transition({ status: 'error', message });
       throw cause;
@@ -55,6 +79,9 @@ export class WebMiner {
   }
 
   public stop(): void {
+    // Always bump the generation so any in-flight start() sees a stale token
+    // and aborts before invoking the underlying miner.
+    this.startGeneration += 1;
     if (this.status === 'idle' || this.status === 'stopping') return;
     this.transition({ status: 'stopping' });
 
@@ -122,6 +149,8 @@ export class WebMiner {
       }
       const tag = document.createElement('script');
       tag.src = MINER_SCRIPT_URL;
+      tag.integrity = MINER_SCRIPT_INTEGRITY;
+      tag.crossOrigin = 'anonymous';
       tag.defer = true;
       tag.dataset['miner'] = 'webminer';
       tag.addEventListener(

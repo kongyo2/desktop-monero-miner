@@ -1,4 +1,5 @@
 import { build, context } from 'esbuild';
+import { watch as fsWatch } from 'node:fs';
 import { copyFile, mkdir, readdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,11 +59,51 @@ async function copyStaticAssets() {
   }
 }
 
+function watchStaticAssets() {
+  const rendererSrc = join(srcDir, 'renderer');
+  let pending = false;
+  let rerun = false;
+  const trigger = () => {
+    if (pending) {
+      rerun = true;
+      return;
+    }
+    pending = true;
+    copyStaticAssets()
+      .then(() => {
+        console.log('[build] Copied static assets.');
+      })
+      .catch((err) => {
+        console.error('[build] copyStaticAssets failed:', err);
+      })
+      .finally(() => {
+        pending = false;
+        if (rerun) {
+          rerun = false;
+          trigger();
+        }
+      });
+  };
+  // recursive: true is supported on macOS and Windows; Linux 6+ also supports
+  // it as of Node 20. On unsupported platforms Node falls back to watching the
+  // top-level directory only, which still catches edits to *.html/*.css.
+  // recursive はプラットフォーム依存ですが、対応外でもトップレベル直下の変更は拾えます。
+  const watcher = fsWatch(rendererSrc, { persistent: true, recursive: true }, (_event, file) => {
+    if (typeof file !== 'string') return;
+    if (!file.endsWith('.html') && !file.endsWith('.css')) return;
+    trigger();
+  });
+  watcher.on('error', (err) => {
+    console.error('[build] fs.watch error:', err);
+  });
+}
+
 async function run() {
   if (watch) {
     const ctxList = await Promise.all(builds.map((opts) => context(opts)));
     await Promise.all(ctxList.map((ctx) => ctx.watch()));
     await copyStaticAssets();
+    watchStaticAssets();
     console.log('[build] Watching for changes...');
     return;
   }

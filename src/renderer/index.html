@@ -3,6 +3,17 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      Content-Security-Policy declared via <meta> so it applies to file:// loads.
+      Electron's session.webRequest.onHeadersReceived does not affect file://
+      resources, so the policy must travel with the document itself.
+      file:// で読み込まれるレンダラに対しても CSP が確実に適用されるよう、
+      ドキュメント自身に CSP を持たせます（webRequest は file:// に効かないため）。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://cdn.jsdelivr.net wss: https:; worker-src 'self' blob:; font-src 'self' data:; object-src 'none'; base-uri 'self'"
+    />
     <title>Desktop Monero Miner</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>

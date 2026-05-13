@@ -1,4 +1,4 @@
-import { BrowserWindow, app, ipcMain, session } from 'electron';
+import { BrowserWindow, app, ipcMain } from 'electron';
 
 import { ConfigStore } from './config-store.ts';
 import { MiningCoordinator, registerIpcHandlers } from './ipc-handlers.ts';
@@ -6,36 +6,18 @@ import { createMainWindow } from './window.ts';
 
 let mainWindow: BrowserWindow | null = null;
 
-function applyContentSecurityPolicy(): void {
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    const csp = [
-      "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: https:",
-      "connect-src 'self' https://cdn.jsdelivr.net wss: https:",
-      "worker-src 'self' blob:",
-      "font-src 'self' data:",
-      "object-src 'none'",
-      "base-uri 'self'",
-      "frame-ancestors 'none'",
-    ].join('; ');
-
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': [csp],
-      },
-    });
-  });
-}
+// The Content-Security-Policy is declared in src/renderer/index.html via a
+// <meta http-equiv="Content-Security-Policy"> tag. Electron's
+// `webRequest.onHeadersReceived` does not apply to `file://` resources, so the
+// policy must accompany the document. See src/renderer/index.html for the
+// active policy.
+// CSP は src/renderer/index.html の <meta> タグで宣言します。
+// Electron の webRequest フックは file:// に効かないため、ドキュメント側で持つ必要があります。
 
 function bootstrap(): void {
   const store = new ConfigStore();
   const coordinator = new MiningCoordinator(() => mainWindow);
   registerIpcHandlers(ipcMain, store, coordinator, app.getVersion());
-
-  applyContentSecurityPolicy();
 
   mainWindow = createMainWindow();
   mainWindow.on('closed', () => {
