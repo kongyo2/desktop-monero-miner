@@ -15,6 +15,18 @@ import { pipeline } from 'node:stream/promises';
  */
 const XMRIG_VERSION = '6.22.2';
 
+/**
+ * Hard cap on the time a single redirect-hop or body stream can take. Without
+ * this, a stalled TCP connection during first-run install would leave
+ * `ensureXmrigBinary()` (and therefore `start()`) pending forever, with no
+ * way for the renderer to recover the UI. 2 minutes is plenty for a ~5–10 MB
+ * archive even on slow links; for fast ones the actual download finishes in
+ * seconds and the timer is a no-op.
+ * 個別 fetch / body ストリームのタイムアウト。これが無いと回線停止時に
+ * install が永遠に終わらず renderer が固まる。
+ */
+const DOWNLOAD_TIMEOUT_MS = 120_000;
+
 type Target = {
   /** Asset filename inside the GitHub release. */
   asset: string;
@@ -182,7 +194,15 @@ async function sha256OfFile(path: string): Promise<string> {
 async function downloadFile(url: string, dest: string): Promise<void> {
   let current = url;
   for (let i = 0; i < 5; i += 1) {
-    const res = await fetch(current, { redirect: 'manual' });
+    // Per-hop AbortSignal.timeout — applies to both the response-headers
+    // phase and the streamed body, since fetch's signal also aborts the
+    // associated body stream. A stalled connection therefore rejects rather
+    // than hanging indefinitely, surfacing as an install error the UI can
+    // toast and the user can retry.
+    // 各ホップで個別タイムアウト。fetch の signal は body にも伝播するので、
+    // 接続が固まればここで reject されて UI に届く。
+    const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+    const res = await fetch(current, { redirect: 'manual', signal });
     if (res.status >= 300 && res.status < 400) {
       const next = res.headers.get('location');
       if (!next) throw new XmrigInstallError(`redirect without location: ${current}`);
