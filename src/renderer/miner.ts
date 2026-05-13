@@ -48,6 +48,13 @@ export class WebMiner {
     acceptedShares: 0,
     rejectedShares: 0,
   };
+  /**
+   * Previous tick snapshot used to derive instantaneous hashrate from the
+   * cumulative `totalhashes` global exposed by the miner script.
+   * 前回 tick のスナップショット。スクリプトが累積カウンタ totalhashes しか
+   * 公開していないため、その差分から瞬間ハッシュレートを算出する。
+   */
+  private prevSample: { totalHashes: number; timeMs: number } | null = null;
   private latestStats: MiningStats = {
     hashrate: 0,
     acceptedShares: 0,
@@ -82,7 +89,18 @@ export class WebMiner {
       if (typeof start !== 'function') {
         throw new Error('startMining function not exposed by miner script.');
       }
-      start(config.pool, config.walletAddress, config.workerId, config.threads, config.password);
+      if (globalThis.wasmSupported === false) {
+        throw new Error('WebAssembly is required but not available in this runtime.');
+      }
+      // Argument order is fixed by the upstream miner script:
+      //   startMining(pool, login, password, threads, userid)
+      // login = wallet address, userid = worker ID. Passing them in any other
+      // order causes the pool to see the worker ID as the password (or vice
+      // versa) and breaks dashboards.
+      // 上流スクリプトの引数順は (pool, login, password, threads, userid) で固定。
+      // login がウォレット、userid がワーカー ID。順序を取り違えるとプール側で
+      // ワーカー ID とパスワードが入れ替わり、ダッシュボードが壊れる。
+      start(config.pool, config.walletAddress, config.password, config.threads, config.workerId);
       this.startedAt = performance.now();
       // Capture the current cumulative counters as the new baseline so a fresh
       // session starts from zero even if the underlying miner script keeps
@@ -117,6 +135,7 @@ export class WebMiner {
     }
     this.endStatsLoop();
     this.startedAt = null;
+    this.prevSample = null;
     this.latestStats = {
       hashrate: 0,
       acceptedShares: this.latestStats.acceptedShares,
@@ -146,21 +165,31 @@ export class WebMiner {
   }
 
   private captureResetOffsets(): void {
+    const submitted = arrayLength(globalThis.sendStack);
+    const rejected = countRejectedShares(globalThis.receiveStack);
     this.resetOffsets = {
-      totalHashes: safeNumber(globalThis.getTotalHashes?.()),
-      acceptedShares: safeNumber(globalThis.getAcceptedHashes?.()),
-      rejectedShares: safeNumber(globalThis.getRejectedHashes?.()),
+      totalHashes: safeNumber(globalThis.totalhashes),
+      acceptedShares: Math.max(0, submitted - rejected),
+      rejectedShares: rejected,
+    };
+    // Reset the hashrate baseline so the first tick after a reset doesn't
+    // report a huge spike based on pre-reset accumulation.
+    // リセット直後の tick が古い累積を引きずって瞬間値を跳ね上げないよう、
+    // 計測基準を作り直す。
+    this.prevSample = {
+      totalHashes: safeNumber(globalThis.totalhashes),
+      timeMs: performance.now(),
     };
   }
 
   private applyGlobals(config: MinerConfig): void {
+    // The upstream script only reads `server` and `throttleMiner` from globals;
+    // everything else is passed positionally into startMining(). Setting the
+    // other slots is harmless noise, so we keep this minimal.
+    // 上流スクリプトがグローバルから読むのは server と throttleMiner のみで、
+    // 他の値は startMining() に位置引数で渡される。設定はこの 2 つに限定する。
     globalThis.server = config.webSocket;
     globalThis.throttleMiner = config.throttle;
-    globalThis.workerId = config.workerId;
-    globalThis.threads = config.threads;
-    globalThis.password = config.password;
-    globalThis.walletAddress = config.walletAddress;
-    globalThis.pool = config.pool;
   }
 
   private loadScript(): Promise<void> {
@@ -220,28 +249,54 @@ export class WebMiner {
 
   private beginStatsLoop(): void {
     this.endStatsLoop();
+    // Seed the previous sample so the first tick (~1s later) has a non-zero
+    // baseline to subtract from, yielding a real hashrate immediately rather
+    // than starting at 0.
+    // 1 秒後の最初の tick で瞬間ハッシュレートが 0 にならないよう、開始時点の
+    // スナップショットを記録しておく。
+    this.prevSample = {
+      totalHashes: safeNumber(globalThis.totalhashes),
+      timeMs: performance.now(),
+    };
     this.statsInterval = window.setInterval(() => {
-      const hashrate = safeNumber(globalThis.getHashesPerSecond?.());
-      const totalHashes = Math.max(
+      const now = performance.now();
+      const totalCumulative = safeNumber(globalThis.totalhashes);
+      const totalHashes = Math.max(0, totalCumulative - this.resetOffsets.totalHashes);
+
+      // Hashrate is derived from the delta of the cumulative counter over the
+      // wall-clock interval since the previous tick. The upstream miner script
+      // does not expose an instantaneous rate getter, and ticks may slip if the
+      // event loop is busy, so we cannot assume a fixed 1s window.
+      // 上流スクリプトに瞬間レートのゲッタは存在しないため、累積差分を実経過時間
+      // で割って算出する。tick の間隔は厳密に 1 秒とは限らない。
+      let hashrate = 0;
+      if (this.prevSample !== null) {
+        const dt = (now - this.prevSample.timeMs) / 1000;
+        const dh = totalCumulative - this.prevSample.totalHashes;
+        if (dt > 0 && dh >= 0) hashrate = dh / dt;
+      }
+      this.prevSample = { totalHashes: totalCumulative, timeMs: now };
+
+      const submitted = arrayLength(globalThis.sendStack);
+      const rejectedTotal = countRejectedShares(globalThis.receiveStack);
+      // sendStack tracks every share posted to the proxy. Pools effectively
+      // never reject shares we already validated client-side against the job
+      // target, so "submitted minus observed rejections" is a sound proxy for
+      // accepted-by-pool. If the proxy/pool surfaces explicit rejection
+      // messages, countRejectedShares() will pull them out of receiveStack.
+      // sendStack はプロキシへ提出した全シェア、receiveStack に拒否通知があれば
+      // それを差し引いた値を「承認シェア」とみなす。
+      const acceptedShares = Math.max(
         0,
-        safeNumber(globalThis.getTotalHashes?.()) - this.resetOffsets.totalHashes,
+        submitted - rejectedTotal - this.resetOffsets.acceptedShares,
       );
-      const accepted = Math.max(
-        0,
-        safeNumber(globalThis.getAcceptedHashes?.()) - this.resetOffsets.acceptedShares,
-      );
-      // Some miner script builds expose a rejected counter; fall back to 0 when absent
-      // rather than freezing a stale value from the previous tick.
-      const rejected = Math.max(
-        0,
-        safeNumber(globalThis.getRejectedHashes?.()) - this.resetOffsets.rejectedShares,
-      );
-      const uptimeSec =
-        this.startedAt === null ? 0 : Math.floor((performance.now() - this.startedAt) / 1000);
+      const rejectedShares = Math.max(0, rejectedTotal - this.resetOffsets.rejectedShares);
+
+      const uptimeSec = this.startedAt === null ? 0 : Math.floor((now - this.startedAt) / 1000);
       this.latestStats = {
         hashrate,
-        acceptedShares: accepted,
-        rejectedShares: rejected,
+        acceptedShares,
+        rejectedShares,
         totalHashes,
         uptimeSec,
       };
@@ -265,4 +320,40 @@ export class WebMiner {
 function safeNumber(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
   return 0;
+}
+
+function arrayLength(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+/**
+ * Pool responses queued in `receiveStack` by the upstream script. Different
+ * proxies/pools surface rejection differently — most commonly via an `error`
+ * field or an `identifier`/`status` value containing "reject". We accept any of
+ * those signals to avoid undercounting.
+ * 上流スクリプトが pool/proxy から受信したメッセージを receiveStack に積む。
+ * 拒否通知の形式は実装依存のため、error フィールドや identifier/status に
+ * "reject" を含むものを幅広く拒否シェアとして数える。
+ */
+function countRejectedShares(stack: unknown): number {
+  if (!Array.isArray(stack)) return 0;
+  let count = 0;
+  for (const item of stack) {
+    if (!item || typeof item !== 'object') continue;
+    const obj = item as Record<string, unknown>;
+    if (obj['error'] !== undefined && obj['error'] !== null) {
+      count += 1;
+      continue;
+    }
+    const identifier = obj['identifier'];
+    if (typeof identifier === 'string' && identifier.toLowerCase().includes('reject')) {
+      count += 1;
+      continue;
+    }
+    const status = obj['status'];
+    if (typeof status === 'string' && status.toLowerCase().includes('reject')) {
+      count += 1;
+    }
+  }
+  return count;
 }
