@@ -32,6 +32,22 @@ export class WebMiner {
    * 競合する未完了の start を確実にキャンセルします。
    */
   private startGeneration = 0;
+  /**
+   * Cumulative miner-script counters at the most recent reset point. Every
+   * stats-loop tick subtracts these from the current globals so the displayed
+   * values are deltas since the last reset (or start), not absolute totals.
+   * 直近のリセット時点における累積カウンタ。表示値は「現在値 - これらのオフセット」
+   * とすることで、Reset ボタン押下後に次の tick で値が戻ってしまうのを防ぎます。
+   */
+  private resetOffsets: {
+    totalHashes: number;
+    acceptedShares: number;
+    rejectedShares: number;
+  } = {
+    totalHashes: 0,
+    acceptedShares: 0,
+    rejectedShares: 0,
+  };
   private latestStats: MiningStats = {
     hashrate: 0,
     acceptedShares: 0,
@@ -68,6 +84,12 @@ export class WebMiner {
       }
       start(config.pool, config.walletAddress, config.workerId, config.threads, config.password);
       this.startedAt = performance.now();
+      // Capture the current cumulative counters as the new baseline so a fresh
+      // session starts from zero even if the underlying miner script keeps
+      // counters across stop/start cycles.
+      // 新規セッション開始時点の累積値をベースラインに記録し、
+      // ミナースクリプトが counters を持ち越しても表示は 0 から開始する。
+      this.captureResetOffsets();
       this.beginStatsLoop();
       this.transition({ status: 'running' });
     } catch (cause) {
@@ -106,6 +128,13 @@ export class WebMiner {
   }
 
   public resetStats(): void {
+    // Re-baseline against the current cumulative miner counters so subsequent
+    // ticks display deltas from "now" rather than bouncing back to old totals.
+    // 累積カウンタを基準点として再設定し、次の tick で旧累積値に戻らないようにする。
+    this.captureResetOffsets();
+    if (this.startedAt !== null) {
+      this.startedAt = performance.now();
+    }
     this.latestStats = {
       hashrate: 0,
       acceptedShares: 0,
@@ -114,6 +143,14 @@ export class WebMiner {
       uptimeSec: 0,
     };
     this.events.onUpdate({ status: this.status, stats: this.getStats() });
+  }
+
+  private captureResetOffsets(): void {
+    this.resetOffsets = {
+      totalHashes: safeNumber(globalThis.getTotalHashes?.()),
+      acceptedShares: safeNumber(globalThis.getAcceptedHashes?.()),
+      rejectedShares: safeNumber(globalThis.getRejectedHashes?.()),
+    };
   }
 
   private applyGlobals(config: MinerConfig): void {
@@ -185,11 +222,20 @@ export class WebMiner {
     this.endStatsLoop();
     this.statsInterval = window.setInterval(() => {
       const hashrate = safeNumber(globalThis.getHashesPerSecond?.());
-      const totalHashes = safeNumber(globalThis.getTotalHashes?.());
-      const accepted = safeNumber(globalThis.getAcceptedHashes?.());
+      const totalHashes = Math.max(
+        0,
+        safeNumber(globalThis.getTotalHashes?.()) - this.resetOffsets.totalHashes,
+      );
+      const accepted = Math.max(
+        0,
+        safeNumber(globalThis.getAcceptedHashes?.()) - this.resetOffsets.acceptedShares,
+      );
       // Some miner script builds expose a rejected counter; fall back to 0 when absent
       // rather than freezing a stale value from the previous tick.
-      const rejected = safeNumber(globalThis.getRejectedHashes?.());
+      const rejected = Math.max(
+        0,
+        safeNumber(globalThis.getRejectedHashes?.()) - this.resetOffsets.rejectedShares,
+      );
       const uptimeSec =
         this.startedAt === null ? 0 : Math.floor((performance.now() - this.startedAt) / 1000);
       this.latestStats = {
