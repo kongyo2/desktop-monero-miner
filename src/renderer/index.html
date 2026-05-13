@@ -6,13 +6,17 @@
     <!--
       Content-Security-Policy declared via <meta> so it applies to file:// loads.
       Electron's session.webRequest.onHeadersReceived does not affect file://
-      resources, so the policy must travel with the document itself.
+      resources, so the policy must travel with the document itself. The
+      renderer no longer loads any third-party scripts (mining runs in the
+      main process via xmrig), so script/connect sources are restricted to
+      self only.
       file:// で読み込まれるレンダラに対しても CSP が確実に適用されるよう、
-      ドキュメント自身に CSP を持たせます（webRequest は file:// に効かないため）。
+      ドキュメント自身に CSP を持たせます。採掘は main の xmrig 子プロセスで実行され、
+      renderer から外部リソースを読み込む必要は無いため self のみ許可します。
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://cdn.jsdelivr.net wss: https: ws://127.0.0.1:*; worker-src 'self' blob:; font-src 'self' data:; object-src 'none'; base-uri 'self'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'"
     />
     <title>Desktop Monero Miner</title>
     <link rel="stylesheet" href="./styles.css" />
@@ -102,35 +106,36 @@
           </div>
           <details class="form__advanced">
             <summary id="advanced-summary">Advanced</summary>
+            <div class="form__row form__row--inline">
+              <div>
+                <label for="field-threads" id="label-threads">Threads</label>
+                <input id="field-threads" name="threads" type="number" min="1" max="256" step="1" />
+                <small class="error" data-error-for="threads"></small>
+              </div>
+              <div>
+                <label for="field-throttle" id="label-throttle">Throttle</label>
+                <input
+                  id="field-throttle"
+                  name="throttle"
+                  type="number"
+                  min="0"
+                  max="99"
+                  step="1"
+                />
+                <small id="help-throttle" class="help"></small>
+                <small class="error" data-error-for="throttle"></small>
+              </div>
+            </div>
             <div class="form__row">
-              <label for="field-ws" id="label-ws">WebSocket override</label>
-              <input id="field-ws" name="webSocket" type="text" autocomplete="off" placeholder="" />
-              <small id="help-ws" class="help"></small>
-              <small class="error" data-error-for="webSocket"></small>
+              <label for="field-password" id="label-password">Password</label>
+              <input
+                id="field-password"
+                name="password"
+                type="password"
+                autocomplete="new-password"
+              />
             </div>
           </details>
-          <div class="form__row form__row--inline">
-            <div>
-              <label for="field-threads" id="label-threads">Threads</label>
-              <input id="field-threads" name="threads" type="number" min="1" max="256" step="1" />
-              <small class="error" data-error-for="threads"></small>
-            </div>
-            <div>
-              <label for="field-throttle" id="label-throttle">Throttle</label>
-              <input id="field-throttle" name="throttle" type="number" min="0" max="99" step="1" />
-              <small id="help-throttle" class="help"></small>
-              <small class="error" data-error-for="throttle"></small>
-            </div>
-          </div>
-          <div class="form__row">
-            <label for="field-password" id="label-password">Password</label>
-            <input
-              id="field-password"
-              name="password"
-              type="password"
-              autocomplete="new-password"
-            />
-          </div>
           <div class="form__row form__row--checkbox">
             <label>
               <input id="field-autostart" type="checkbox" />

@@ -3,27 +3,20 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   type AppPreferences,
   type MinerConfig,
-  type MiningStatus,
   type PartialMinerConfig,
   type PersistedState,
 } from '../shared/config-schema.ts';
 import { IpcChannel, type MiningStateUpdate } from '../shared/ipc.ts';
-
-export type StartMiningResult = {
-  status: MiningStatus;
-  webSocket: string;
-};
 
 export type MinerBridge = {
   getConfig: () => Promise<PersistedState['config']>;
   setConfig: (patch: PartialMinerConfig) => Promise<PersistedState['config']>;
   getPreferences: () => Promise<AppPreferences>;
   setPreferences: (patch: Partial<AppPreferences>) => Promise<AppPreferences>;
-  startMining: (config: MinerConfig) => Promise<StartMiningResult>;
-  stopMining: () => Promise<MiningStatus>;
-  getMiningStatus: () => Promise<MiningStatus>;
-  getProxyAddress: () => Promise<string>;
-  reportStats: (update: MiningStateUpdate) => void;
+  startMining: (config: MinerConfig) => Promise<MiningStateUpdate>;
+  stopMining: () => Promise<MiningStateUpdate>;
+  resetStats: () => Promise<MiningStateUpdate>;
+  getMiningState: () => Promise<MiningStateUpdate>;
   onStateUpdate: (handler: (update: MiningStateUpdate) => void) => () => void;
   openExternal: (url: string) => Promise<void>;
   appVersion: () => Promise<string>;
@@ -36,18 +29,15 @@ const bridge: MinerBridge = {
   setPreferences: (patch) => ipcRenderer.invoke(IpcChannel.SetPreferences, { patch }),
   startMining: (config) => ipcRenderer.invoke(IpcChannel.StartMining, config),
   stopMining: () => ipcRenderer.invoke(IpcChannel.StopMining),
-  getMiningStatus: () => ipcRenderer.invoke(IpcChannel.GetMiningStatus),
-  getProxyAddress: () => ipcRenderer.invoke(IpcChannel.ProxyAddress),
-  reportStats: (update) => {
-    ipcRenderer.send(IpcChannel.ReportStats, update);
-  },
+  resetStats: () => ipcRenderer.invoke(IpcChannel.ResetStats),
+  getMiningState: () => ipcRenderer.invoke(IpcChannel.GetMiningState),
   onStateUpdate: (handler) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown): void => {
       handler(payload as MiningStateUpdate);
     };
-    ipcRenderer.on(IpcChannel.ReportStats, listener);
+    ipcRenderer.on(IpcChannel.StateUpdate, listener);
     return () => {
-      ipcRenderer.removeListener(IpcChannel.ReportStats, listener);
+      ipcRenderer.removeListener(IpcChannel.StateUpdate, listener);
     };
   },
   openExternal: (url) => ipcRenderer.invoke(IpcChannel.OpenExternal, { url }),

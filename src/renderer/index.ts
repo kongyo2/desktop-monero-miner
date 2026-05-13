@@ -3,26 +3,19 @@ import { z } from 'zod';
 import {
   type Locale,
   type MinerConfig,
+  type MiningStats,
   type MiningStatus,
   minerConfigSchema,
 } from '../shared/config-schema.ts';
 import type { MiningStateUpdate } from '../shared/ipc.ts';
 import { formatHashrate, formatInteger, requireElement } from './dom.ts';
 import { I18n, detectInitialLocale } from './i18n.ts';
-import { WebMiner } from './miner.ts';
 
 import './global.d.ts';
 
 const SOURCE_URL = 'https://github.com/kongyo2/desktop-monero-miner';
 
-type FieldName =
-  | 'walletAddress'
-  | 'workerId'
-  | 'pool'
-  | 'webSocket'
-  | 'threads'
-  | 'throttle'
-  | 'password';
+type FieldName = 'walletAddress' | 'workerId' | 'pool' | 'threads' | 'throttle' | 'password';
 
 /**
  * Form defaults used to pre-fill the UI on first launch. Wallet address is
@@ -35,7 +28,6 @@ type FormValues = Record<FieldName, string | number> & {
   walletAddress: string;
   workerId: string;
   pool: string;
-  webSocket: string;
   threads: number;
   throttle: number;
   password: string;
@@ -44,16 +36,10 @@ type FormValues = Record<FieldName, string | number> & {
 const FORM_DEFAULTS: FormValues = {
   walletAddress: '',
   workerId: 'Desktop-Miner',
-  // Default Stratum endpoint exposed by moneroocean.stream's auto-diff port.
-  // Format is "host:port" or "host:port:tls".
-  // 既定の Stratum エンドポイント。"host:port" または "host:port:tls" 形式。
+  // Default Stratum endpoint: moneroocean.stream auto-diff port.
+  // Format is "host:port" or "host:port:tls". xmrig speaks Stratum directly.
+  // 既定の Stratum エンドポイント。"host:port" または "host:port:tls" 形式で xmrig に渡る。
   pool: 'gulf.moneroocean.stream:10128',
-  // Empty = use the bundled local proxy (the main process injects a real
-  // ws://127.0.0.1:<port> URL at start). Override only if you want to point
-  // the renderer at an external WebSocket relay instead.
-  // 空欄は同梱ローカルプロキシを使う指示。外部 WebSocket リレーを使いたい
-  // 場合のみ明示的に URL を設定する。
-  webSocket: '',
   threads: 2,
   throttle: 20,
   password: '',
@@ -61,26 +47,13 @@ const FORM_DEFAULTS: FormValues = {
 
 class App {
   private readonly i18n: I18n;
-  private readonly miner: WebMiner;
   private autoStart = false;
   private toastTimer: number | null = null;
-  /**
-   * Monotonically increasing token that invalidates an in-flight
-   * startMining() when the user presses Stop while the IPC await is still
-   * resolving (the bundled proxy bootstrap can take a noticeable beat). The
-   * token is captured at the top of startMining() and re-checked after every
-   * await; a stale token means the user already cancelled and mining must
-   * not begin.
-   * 「採掘開始」処理の最中に Stop が押された場合に in-flight な start を無効化する
-   * ためのトークン。await のたびに比較して、古いトークンならそこで処理を中断する。
-   */
-  private startGeneration = 0;
+  private status: MiningStatus = 'idle';
+  private stats: MiningStats = emptyStats();
 
   public constructor(locale: Locale) {
     this.i18n = new I18n(locale);
-    this.miner = new WebMiner({
-      onUpdate: (update) => this.handleUpdate(update),
-    });
   }
 
   public async initialize(): Promise<void> {
@@ -97,7 +70,6 @@ class App {
       walletAddress: persistedConfig.walletAddress ?? FORM_DEFAULTS.walletAddress,
       workerId: persistedConfig.workerId ?? FORM_DEFAULTS.workerId,
       pool: persistedConfig.pool ?? FORM_DEFAULTS.pool,
-      webSocket: persistedConfig.webSocket ?? FORM_DEFAULTS.webSocket,
       threads: persistedConfig.threads ?? FORM_DEFAULTS.threads,
       throttle: persistedConfig.throttle ?? FORM_DEFAULTS.throttle,
       password: persistedConfig.password ?? FORM_DEFAULTS.password,
@@ -109,6 +81,7 @@ class App {
     this.bindLanguage();
     this.bindForm();
     this.bindActions();
+    this.bindStateUpdates();
     this.applyLocaleStrings();
     this.i18n.onChange(() => this.applyLocaleStrings());
 
@@ -154,18 +127,12 @@ class App {
     });
 
     requireElement<HTMLButtonElement>('btn-stop').addEventListener('click', () => {
-      // Bump the generation first so any startMining() already past its
-      // initial `++generation` sees a stale token after its next await and
-      // bails out before calling miner.start().
-      // Stop が先に generation を進めることで、in-flight な start を確実に殺す。
-      this.startGeneration += 1;
-      this.miner.stop();
       void window.miner.stopMining();
       this.showToast(this.i18n.messages().toastStopped, 'success');
     });
 
     requireElement<HTMLButtonElement>('btn-reset').addEventListener('click', () => {
-      this.miner.resetStats();
+      void window.miner.resetStats();
     });
 
     requireElement<HTMLButtonElement>('btn-open-source').addEventListener('click', () => {
@@ -173,36 +140,23 @@ class App {
     });
   }
 
+  private bindStateUpdates(): void {
+    window.miner.onStateUpdate((update) => this.applyUpdate(update));
+    // Subscribe first, then pull the current snapshot — without this, a
+    // renderer that attaches mid-session (e.g. while xmrig is starting or
+    // already mining) stays on 'idle' until the next status transition.
+    // Subscribe を先に行ってから snapshot を取得し、間に発火したイベントを取り逃さない。
+    void window.miner.getMiningState().then((update) => this.applyUpdate(update));
+  }
+
   private async startMining(config: MinerConfig): Promise<void> {
-    const generation = ++this.startGeneration;
     try {
       await window.miner.setConfig(config);
-      if (generation !== this.startGeneration) return;
-      // Main process boots the bundled Stratum proxy and returns the
-      // ws://127.0.0.1:<port> URL the renderer must connect to. Any user-set
-      // webSocket override is honoured by treating non-empty values as a
-      // direct relay; an empty value triggers the local proxy path.
-      // main から返ってくる WebSocket URL を採掘設定にマージしてから採掘開始。
-      // 空欄ならローカルプロキシ、明示指定があれば外部リレーを使う。
-      const { webSocket } = await window.miner.startMining(config);
-      if (generation !== this.startGeneration) {
-        // Stop was pressed during the proxy bootstrap await. Tell main to
-        // drop the started state and skip the local miner.start() — without
-        // this guard the CPU miner kicks off after explicit user cancel.
-        // bootstrap 中に Stop が押された場合、main 側も停止させて自分は始めない。
-        void window.miner.stopMining();
-        return;
-      }
-      const effectiveConfig: MinerConfig = {
-        ...config,
-        webSocket: config.webSocket === '' ? webSocket : config.webSocket,
-      };
-      await this.miner.start(effectiveConfig);
+      await window.miner.startMining(config);
     } catch (cause) {
       console.error('[renderer] startMining failed:', cause);
-      if (generation === this.startGeneration) {
-        this.showToast(this.i18n.messages().toastStartFailed, 'error');
-      }
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      this.showToast(`${this.i18n.messages().toastStartFailed}: ${detail}`, 'error');
     }
   }
 
@@ -211,7 +165,6 @@ class App {
       walletAddress: this.fieldValue('field-wallet'),
       workerId: this.fieldValue('field-worker'),
       pool: this.fieldValue('field-pool'),
-      webSocket: this.fieldValue('field-ws'),
       threads: numberFromValue(this.fieldValue('field-threads')),
       throttle: numberFromValue(this.fieldValue('field-throttle')),
       // Pool passwords are opaque credentials — whitespace can be significant,
@@ -234,7 +187,6 @@ class App {
     setInputValue('field-wallet', values.walletAddress);
     setInputValue('field-worker', values.workerId);
     setInputValue('field-pool', values.pool);
-    setInputValue('field-ws', values.webSocket);
     setInputValue('field-threads', String(values.threads));
     setInputValue('field-throttle', String(values.throttle));
     setInputValue('field-password', values.password);
@@ -286,8 +238,6 @@ class App {
     requireElement<HTMLElement>('label-worker').textContent = m.fieldWorkerId;
     requireElement<HTMLElement>('label-pool').textContent = m.fieldPool;
     requireElement<HTMLElement>('help-pool').textContent = m.fieldPoolHelp;
-    requireElement<HTMLElement>('label-ws').textContent = m.fieldWebSocket;
-    requireElement<HTMLElement>('help-ws').textContent = m.fieldWebSocketHelp;
     requireElement<HTMLElement>('advanced-summary').textContent = m.advancedSummary;
     requireElement<HTMLElement>('label-threads').textContent = m.fieldThreads;
     requireElement<HTMLElement>('label-throttle').textContent = m.fieldThrottle;
@@ -312,24 +262,37 @@ class App {
     requireElement<HTMLElement>('attribution-description').textContent = m.attributionDescription;
     requireElement<HTMLElement>('version-label').textContent = m.versionLabel;
 
-    this.handleUpdate({ status: this.miner.getStatus(), stats: this.miner.getStats() });
+    this.renderState();
   }
 
-  private handleUpdate(update: MiningStateUpdate): void {
+  private applyUpdate(update: MiningStateUpdate): void {
+    this.status = update.status;
+    if (update.stats) this.stats = update.stats;
+    this.renderState(update.message);
+  }
+
+  private renderState(messageOverride?: string): void {
     const m = this.i18n.messages();
-    const statusText = statusToText(update.status, m);
+    const status = this.status;
+    const statusText = statusToText(status, m);
     requireElement<HTMLElement>('status-text').textContent = statusText;
 
     const dot = requireElement<HTMLElement>('status-dot');
-    dot.className = `dot dot--${update.status}`;
+    dot.className = `dot dot--${status}`;
 
     const startBtn = requireElement<HTMLButtonElement>('btn-start');
     const stopBtn = requireElement<HTMLButtonElement>('btn-stop');
-    const running = update.status === 'running' || update.status === 'starting';
-    startBtn.disabled = running;
-    stopBtn.disabled = !running;
+    const active = status === 'running' || status === 'starting';
+    // Disable Start during 'stopping' too — the main runner rejects start()
+    // calls while a stop is unwinding, so leaving the button enabled would
+    // silently drop the user's click and make restart feel flaky. Stop is
+    // disabled during 'stopping' because pressing it again has no effect.
+    // stopping 中の Start クリックは main 側で拒否されるためボタンを disable に。
+    const transitioning = status === 'stopping';
+    startBtn.disabled = active || transitioning;
+    stopBtn.disabled = !active;
 
-    const stats = update.stats ?? this.miner.getStats();
+    const stats = this.stats;
     requireElement<HTMLElement>('stat-hashrate').textContent = formatHashrate(
       stats.hashrate,
       '',
@@ -344,7 +307,9 @@ class App {
       seconds,
     );
 
-    window.miner.reportStats({ status: update.status, stats, ...maybeMessage(update.message) });
+    if (messageOverride !== undefined && messageOverride !== '') {
+      this.showToast(messageOverride, status === 'error' ? 'error' : 'success');
+    }
   }
 
   private showToast(text: string, kind: 'success' | 'error' = 'success'): void {
@@ -355,13 +320,18 @@ class App {
     if (this.toastTimer !== null) window.clearTimeout(this.toastTimer);
     this.toastTimer = window.setTimeout(() => {
       el.classList.remove('is-visible');
-    }, 2400);
+    }, 4000);
   }
 }
 
-function maybeMessage(message: string | undefined): { message?: string } {
-  if (message === undefined) return {};
-  return { message };
+function emptyStats(): MiningStats {
+  return {
+    hashrate: 0,
+    acceptedShares: 0,
+    rejectedShares: 0,
+    totalHashes: 0,
+    uptimeSec: 0,
+  };
 }
 
 function setInputValue(id: string, value: string): void {
