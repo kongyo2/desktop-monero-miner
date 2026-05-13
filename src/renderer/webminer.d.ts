@@ -12,6 +12,7 @@ declare global {
   type GetHashesPerSecondFn = () => number;
   type GetTotalHashesFn = () => number;
   type GetAcceptedHashesFn = () => number;
+  type GetRejectedHashesFn = () => number;
 
   // Globals populated by https://cdn.jsdelivr.net/gh/NajmAjmal/monero-webminer@main/script.js
   // 上記スクリプトが renderer 上で生成するグローバル定義。
@@ -39,6 +40,8 @@ declare global {
   var getTotalHashes: GetTotalHashesFn | undefined;
   // eslint-disable-next-line vars-on-top, no-var
   var getAcceptedHashes: GetAcceptedHashesFn | undefined;
+  // eslint-disable-next-line vars-on-top, no-var
+  var getRejectedHashes: GetRejectedHashesFn | undefined;
 }
 
 export {};

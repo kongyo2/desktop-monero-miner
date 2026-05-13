@@ -1,6 +1,8 @@
 import { BrowserWindow, shell } from 'electron';
 import { join } from 'node:path';
 
+import { isSafeExternalUrl } from '../shared/ipc.ts';
+
 export function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 960,
@@ -21,7 +23,11 @@ export function createMainWindow(): BrowserWindow {
   win.setMenuBarVisibility(false);
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    if (isSafeExternalUrl(url)) {
+      void shell.openExternal(url);
+    } else {
+      console.warn('[window] blocked openExternal for disallowed URL:', url);
+    }
     return { action: 'deny' };
   });
 

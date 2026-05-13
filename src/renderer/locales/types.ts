@@ -39,8 +39,7 @@ export type Messages = {
   toastValidationFailed: string;
   toastStopped: string;
   errorWalletInvalid: string;
-  errorWalletTooShort: string;
-  errorWalletTooLong: string;
+  errorWalletInvalidLength: string;
   errorThreadsRange: string;
   errorThrottleRange: string;
   errorPoolEmpty: string;

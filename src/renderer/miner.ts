@@ -101,7 +101,7 @@ export class WebMiner {
 
   private loadScript(): Promise<void> {
     if (this.scriptPromise) return this.scriptPromise;
-    this.scriptPromise = new Promise<void>((resolve, reject) => {
+    const promise = new Promise<void>((resolve, reject) => {
       const existing = document.querySelector<HTMLScriptElement>(`script[data-miner="webminer"]`);
       if (existing) {
         if (existing.dataset['loaded'] === 'true') {
@@ -109,9 +109,15 @@ export class WebMiner {
           return;
         }
         existing.addEventListener('load', () => resolve(), { once: true });
-        existing.addEventListener('error', () => reject(new Error('Failed to load miner script')), {
-          once: true,
-        });
+        existing.addEventListener(
+          'error',
+          () => {
+            // Drop the broken tag so the next attempt can re-insert a fresh one.
+            existing.remove();
+            reject(new Error('Failed to load miner script'));
+          },
+          { once: true },
+        );
         return;
       }
       const tag = document.createElement('script');
@@ -126,12 +132,24 @@ export class WebMiner {
         },
         { once: true },
       );
-      tag.addEventListener('error', () => reject(new Error('Failed to load miner script')), {
-        once: true,
-      });
+      tag.addEventListener(
+        'error',
+        () => {
+          tag.remove();
+          reject(new Error('Failed to load miner script'));
+        },
+        { once: true },
+      );
       document.head.appendChild(tag);
     });
-    return this.scriptPromise;
+    // Clear the cached promise on failure so callers can retry after a transient error.
+    promise.catch(() => {
+      if (this.scriptPromise === promise) {
+        this.scriptPromise = null;
+      }
+    });
+    this.scriptPromise = promise;
+    return promise;
   }
 
   private beginStatsLoop(): void {
@@ -140,12 +158,15 @@ export class WebMiner {
       const hashrate = safeNumber(globalThis.getHashesPerSecond?.());
       const totalHashes = safeNumber(globalThis.getTotalHashes?.());
       const accepted = safeNumber(globalThis.getAcceptedHashes?.());
+      // Some miner script builds expose a rejected counter; fall back to 0 when absent
+      // rather than freezing a stale value from the previous tick.
+      const rejected = safeNumber(globalThis.getRejectedHashes?.());
       const uptimeSec =
         this.startedAt === null ? 0 : Math.floor((performance.now() - this.startedAt) / 1000);
       this.latestStats = {
         hashrate,
         acceptedShares: accepted,
-        rejectedShares: this.latestStats.rejectedShares,
+        rejectedShares: rejected,
         totalHashes,
         uptimeSec,
       };

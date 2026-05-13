@@ -2,24 +2,35 @@ import { z } from 'zod';
 
 /**
  * Monero wallet addresses commonly start with 4 (main address) or 8 (subaddress).
- * The standard public address length is 95 base58 characters; integrated addresses are 106.
- * モネロのウォレットアドレスは通常「4」または「8」で始まり、95 文字（標準）か 106 文字（統合）です。
+ * The standard public address length is exactly 95 base58 characters; integrated addresses are exactly 106.
+ * モネロのウォレットアドレスは通常「4」または「8」で始まり、95 文字（標準）か 106 文字（統合）の固定長です。
  */
+const MONERO_ADDRESS_LENGTHS = new Set([95, 106]);
+
 export const moneroAddressSchema = z
   .string()
   .trim()
-  .min(95, { message: 'wallet_address_too_short' })
-  .max(106, { message: 'wallet_address_too_long' })
-  .regex(/^[48][1-9A-HJ-NP-Za-km-z]+$/u, { message: 'wallet_address_invalid' });
+  .regex(/^[48][1-9A-HJ-NP-Za-km-z]+$/u, { message: 'wallet_address_invalid' })
+  .refine((value) => MONERO_ADDRESS_LENGTHS.has(value.length), {
+    message: 'wallet_address_invalid_length',
+  });
 
 export const localeSchema = z.enum(['ja', 'en']);
 export type Locale = z.infer<typeof localeSchema>;
+
+const wsUrlSchema = z
+  .string()
+  .trim()
+  .url()
+  .refine((value) => value.startsWith('ws://') || value.startsWith('wss://'), {
+    message: 'websocket_url_invalid_scheme',
+  });
 
 export const minerConfigSchema = z.object({
   walletAddress: moneroAddressSchema,
   workerId: z.string().trim().min(1).max(64).default('Desktop-Miner'),
   pool: z.string().trim().min(1).default('moneroocean.stream'),
-  webSocket: z.string().trim().url().default('wss://ny1.xmrminingproxy.com'),
+  webSocket: wsUrlSchema.default('wss://ny1.xmrminingproxy.com'),
   threads: z.number().int().min(1).max(256).default(2),
   throttle: z.number().int().min(0).max(99).default(20),
   password: z.string().default(''),

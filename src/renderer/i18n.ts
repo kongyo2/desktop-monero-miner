@@ -41,10 +41,10 @@ export class I18n {
     switch (code) {
       case 'wallet_address_invalid':
         return m.errorWalletInvalid;
-      case 'wallet_address_too_short':
-        return m.errorWalletTooShort;
-      case 'wallet_address_too_long':
-        return m.errorWalletTooLong;
+      case 'wallet_address_invalid_length':
+        return m.errorWalletInvalidLength;
+      case 'websocket_url_invalid_scheme':
+        return m.errorWebsocketInvalid;
       default:
         return code;
     }

@@ -38,10 +38,34 @@ export const setPreferencesPayloadSchema = z.object({
 });
 export type SetPreferencesPayload = z.infer<typeof setPreferencesPayloadSchema>;
 
+/**
+ * Allowlist for `shell.openExternal`. We deliberately reject `file:`, `javascript:`,
+ * `mailto:` and any custom protocol handlers — only HTTP(S) is forwarded to the OS.
+ * `shell.openExternal` の許可スキーム。`file:` や独自プロトコル経由でのハンドラ起動を防ぐため
+ * HTTP(S) のみを許可します。
+ */
+export const ALLOWED_EXTERNAL_PROTOCOLS = ['https:', 'http:'] as const;
+
+function isAllowedExternalUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return (ALLOWED_EXTERNAL_PROTOCOLS as readonly string[]).includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
 export const openExternalPayloadSchema = z.object({
-  url: z.string().url(),
+  url: z
+    .string()
+    .url()
+    .refine(isAllowedExternalUrl, { message: 'external_url_protocol_not_allowed' }),
 });
 export type OpenExternalPayload = z.infer<typeof openExternalPayloadSchema>;
+
+export function isSafeExternalUrl(value: string): boolean {
+  return isAllowedExternalUrl(value);
+}
 
 export const miningStateUpdateSchema = z.object({
   status: miningStatusSchema,

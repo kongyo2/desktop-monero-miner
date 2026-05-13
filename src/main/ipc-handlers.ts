@@ -11,6 +11,7 @@ import {
 import {
   IpcChannel,
   type MiningStateUpdate,
+  isSafeExternalUrl,
   miningStateUpdateSchema,
   openExternalPayloadSchema,
   setConfigPayloadSchema,
@@ -89,12 +90,21 @@ export function registerIpcHandlers(
   });
 
   ipcMain.on(IpcChannel.ReportStats, (_event, raw: unknown): void => {
-    const update = miningStateUpdateSchema.parse(raw);
-    coordinator.onRendererUpdate(update);
+    // Fire-and-forget event — never throw out of the handler.
+    const parsed = miningStateUpdateSchema.safeParse(raw);
+    if (!parsed.success) {
+      console.warn('[ipc] ignoring malformed ReportStats payload:', parsed.error.message);
+      return;
+    }
+    coordinator.onRendererUpdate(parsed.data);
   });
 
   ipcMain.handle(IpcChannel.OpenExternal, async (_event, raw: unknown): Promise<void> => {
     const { url } = openExternalPayloadSchema.parse(raw);
+    // Defense in depth: schema already filtered, but keep the runtime guard.
+    if (!isSafeExternalUrl(url)) {
+      throw new Error('external_url_protocol_not_allowed');
+    }
     await shell.openExternal(url);
   });
 
